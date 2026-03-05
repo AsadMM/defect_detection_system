@@ -6,15 +6,30 @@ Created on Tue May 21 15:52:39 2024
 """
 
 # import the necessary packages
+import os
+
+def configure_environment():
+    os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
+
+configure_environment()
+
+
 from src.models.autoencoder import build1
-from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, Callback
+import tensorflow as tf
+import mlflow
+import mlflow.keras
 from sklearn.model_selection import train_test_split
 import numpy as np
 import pickle
-import os
 from glob import glob
 import cv2
 import argparse
+
+# Configure TensorFlow to allocate GPU memory on demand instead of pre-allocating all memory.
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
 
 # Initialize the argument parser for getting the global parameters needed
 # for training.
@@ -36,6 +51,15 @@ parser.add_argument('--latent_dim', type=int, default=100,
                     help='latent dimension for the code-space (bottleneck) of the autoencoder')
 
 
+class MLflowMetricsLogger(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        if 'loss' in logs:
+            mlflow.log_metric('training_loss', float(logs['loss']), step=epoch)
+        if 'val_loss' in logs:
+            mlflow.log_metric('validation_loss', float(logs['val_loss']), step=epoch)
+
+
 
 def get_filenames(name: str, t: str = 'train') -> list[str]:
     """
@@ -55,10 +79,10 @@ def get_filenames(name: str, t: str = 'train') -> list[str]:
 
     """
     if t == 'train':
-        files = glob(os.path.join('data', name, 'train', 'good', '*.png'))
+        files = glob(os.path.join('data', 'mvtec', name, 'train', 'good', '*.png'))
         return files
     elif t == 'test':
-        files = glob(os.path.join('data', name, 'test', '*', '*.png'))
+        files = glob(os.path.join('data', 'mvtec', name, 'test', '*', '*.png'))
         return files
 
 
@@ -342,6 +366,15 @@ if __name__ == '__main__':
     FILTERS = args.filters
     LATENT_DIM = args.latent_dim
     print(FILTERS, LATENT_DIM)
+    mlflow.set_tracking_uri("sqlite:///artifacts/mlflow/mlflow.db")
+    mlflow.set_experiment("autoencoder_anomaly_detection")
+    mlflow.start_run()
+    mlflow.log_param('dataset_name', f'mvtec/{NAME}')
+    mlflow.log_param('epochs', EPOCHS)
+    mlflow.log_param('batch_size', BS)
+    mlflow.log_param('filters', FILTERS)
+    mlflow.log_param('latent_dim', LATENT_DIM)
+    mlflow.log_param('img_size', IMG_SIZE)
 
     print('Reading files for ' + NAME)
     train_files = get_filenames(NAME, 'train')
@@ -367,12 +400,13 @@ if __name__ == '__main__':
     autoencoder.summary()
     # train the convolutional autoencoder
     earlyStopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    mlflowMetricsLogger = MLflowMetricsLogger()
     checkpoint = ModelCheckpoint(os.path.join('artifacts', 'checkpoints', NAME, '{epoch:02d}-{val_loss:.5f}.weights.h5'),
                                  save_best_only=True, verbose=1, save_weights_only=True)
     H = autoencoder.fit(
         train_data, train_data,
         validation_data=(validation_data, validation_data),
-        epochs=EPOCHS, batch_size=BS, callbacks=[checkpoint, earlyStopping])
+        epochs=EPOCHS, batch_size=BS, callbacks=[checkpoint, earlyStopping, mlflowMetricsLogger])
     # Estimate the threshold based on the validation set
     valid_predicted_imgs = autoencoder.predict(validation_data)
     thresholds_map = get_threshold(validation_data, valid_predicted_imgs)
@@ -423,6 +457,7 @@ if __name__ == '__main__':
     os.makedirs(os.path.join('artifacts', 'sizes'), exist_ok=True)
     
     autoencoder.save(os.path.join('artifacts', 'models', 'model_' + NAME + '.h5'))
+    mlflow.keras.log_model(autoencoder, artifact_path='model')
     # Open a file and use dump() 
     with open(os.path.join('artifacts', 'thresholds', 'thresholds_' + NAME + '.pkl'), 'wb') as file:
         # Save the thresholds value in a file
@@ -440,4 +475,5 @@ if __name__ == '__main__':
     thresholds = np.percentile(res_maps, percentiles)
     thresholds_dict = {round(percentile,1): threshold for percentile, threshold in zip(percentiles, thresholds)}'''
 
+    mlflow.end_run()
     print('Exiting...')
