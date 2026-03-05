@@ -441,14 +441,14 @@ if __name__ == '__main__':
             test_results_grouped[defect]['Predicted_1'] += 1
     print('Grouped test results:', test_results_grouped)
     print('Saving images...')
-    if not os.path.exists(os.path.join("comparison_images", NAME)):
-        os.makedirs(os.path.join("comparison_images", NAME))
+    if not os.path.exists(os.path.join('artifacts', 'comparison_images', NAME)):
+        os.makedirs(os.path.join('artifacts', 'comparison_images', NAME))
     redrawn_imgs, original_imgs = get_drawn_results(test_imgs, masked_results)
     for redrawn, original, defect, i in zip(redrawn_imgs, original_imgs, defects,
                                             range(len(original_imgs))):
-        cv2.imwrite(os.path.join("comparison_images", NAME, f'redrawn_{i}.png'),
+        cv2.imwrite(os.path.join('artifacts', 'comparison_images', NAME, f'redrawn_{i}.png'),
                     redrawn)
-        cv2.imwrite(os.path.join("comparison_images", NAME, f'original_{defect}_{i}.png'),
+        cv2.imwrite(os.path.join('artifacts', 'comparison_images', NAME, f'original_{defect}_{i}.png'),
                     original)
 
     print('Saving model, threshold map and other variables...')
