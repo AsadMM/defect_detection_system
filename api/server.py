@@ -13,8 +13,8 @@ import cv2
 from io import BytesIO
 import zipfile
 import pickle
-from network import build1
-from train import get_results, get_drawn_results, convert_int
+from src.models.autoencoder import build1
+from src.training.train import get_results, get_drawn_results, convert_int
 from glob import glob
 from enum import Enum
 import os
@@ -52,9 +52,9 @@ sizes = {}
 threshold_maps = {}
 names = set()
 # load filepaths based on patterns, for each: model, size and threshold
-model_paths = glob(os.path.join('models', 'model_*.h5'))
-size_paths = glob(os.path.join('sizes', 'sizes_*.pkl'))
-thresholds_paths = glob(os.path.join('thresholds', 'thresholds_*.pkl'))
+model_paths = glob(os.path.join('artifacts', 'models', 'model_*.h5'))
+size_paths = glob(os.path.join('artifacts', 'sizes', 'sizes_*.pkl'))
+thresholds_paths = glob(os.path.join('artifacts', 'thresholds', 'thresholds_*.pkl'))
 # read each set of files and store it in memory
 for model_path, size_path, threshold_path in zip(model_paths, size_paths, thresholds_paths):
     # find the name of the object class this set of files are of

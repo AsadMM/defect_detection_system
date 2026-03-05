@@ -13,6 +13,12 @@ checkpoints/
 redrawn_images.zip
 archive.zip
 
+# artifacts: keep only first-level folders, ignore files/subfolders inside them
+artifacts/*
+!artifacts/*/
+artifacts/*/*
+!artifacts/*/.gitkeep
+
 # C extensions
 *.so
 

@@ -8,7 +8,7 @@ Created on Sun May 26 20:51:28 2024
 import requests
 import cv2
 import numpy as np
-from train import get_filenames, read_images, convert_int
+from src.training.train import get_filenames, read_images, convert_int
 import os
 
 NAME = 'hazelnut'

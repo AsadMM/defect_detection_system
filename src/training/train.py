@@ -6,7 +6,7 @@ Created on Tue May 21 15:52:39 2024
 """
 
 # import the necessary packages
-from network import build1
+from src.models.autoencoder import build1
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from sklearn.model_selection import train_test_split
 import numpy as np
@@ -367,7 +367,7 @@ if __name__ == '__main__':
     autoencoder.summary()
     # train the convolutional autoencoder
     earlyStopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-    checkpoint = ModelCheckpoint(os.path.join('checkpoints', NAME, '{epoch:02d}-{val_loss:.5f}.weights.h5'),
+    checkpoint = ModelCheckpoint(os.path.join('artifacts', 'checkpoints', NAME, '{epoch:02d}-{val_loss:.5f}.weights.h5'),
                                  save_best_only=True, verbose=1, save_weights_only=True)
     H = autoencoder.fit(
         train_data, train_data,
@@ -381,7 +381,7 @@ if __name__ == '__main__':
 
     # IGNORE THIS
     '''threshold = 0.07769
-    autoencoder.load_weights('models/model_hazelnut.h5')
+    autoencoder.load_weights(os.path.join('artifacts', 'models', 'model_hazelnut.h5'))
     autoencoder.summary()'''
 
     # Read test images and run through the model and finally get the masked images
@@ -418,17 +418,17 @@ if __name__ == '__main__':
                     original)
 
     print('Saving model, threshold map and other variables...')
-    os.makedirs('models', exist_ok=True)
-    os.makedirs('thresholds', exist_ok=True)
-    os.makedirs('sizes', exist_ok=True)
+    os.makedirs(os.path.join('artifacts', 'models'), exist_ok=True)
+    os.makedirs(os.path.join('artifacts', 'thresholds'), exist_ok=True)
+    os.makedirs(os.path.join('artifacts', 'sizes'), exist_ok=True)
     
-    autoencoder.save(os.path.join('models', 'model_' + NAME + '.h5'))
+    autoencoder.save(os.path.join('artifacts', 'models', 'model_' + NAME + '.h5'))
     # Open a file and use dump() 
-    with open(os.path.join('thresholds', 'thresholds_' + NAME + '.pkl'), 'wb') as file:
+    with open(os.path.join('artifacts', 'thresholds', 'thresholds_' + NAME + '.pkl'), 'wb') as file:
         # Save the thresholds value in a file
         pickle.dump(thresholds_map, file)
 
-    with open(os.path.join('sizes', 'sizes_' + NAME + '.pkl'), 'wb') as file:
+    with open(os.path.join('artifacts', 'sizes', 'sizes_' + NAME + '.pkl'), 'wb') as file:
         # Save the sizes value in a file
         pickle.dump([IMG_SIZE, IMG_DEPTH], file)
 
