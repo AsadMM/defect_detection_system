@@ -68,8 +68,14 @@ def build1(width: int, height: int, depth: int, filters: tuple | list = (32, 64,
     # start building the decoder model which will accept the
     # output of the encoder as its inputs
     latentInputs = Input(shape=(latentDim,))
-    x = Dense(np.prod(volumeSize[1:]))(latentInputs)
-    x = Reshape((volumeSize[1], volumeSize[2], volumeSize[3]))(x)
+    decoder_shape = volumeSize[1:]
+    if any(dim is None for dim in decoder_shape):
+        raise ValueError(f"Encoder output shape must be fully defined, got: {volumeSize}")
+    decoder_units = int(np.prod(decoder_shape))
+    if decoder_units <= 0:
+        raise ValueError(f"Decoder units must be positive, got: {decoder_units}")
+    x = Dense(decoder_units)(latentInputs)
+    x = Reshape(tuple(int(dim) for dim in decoder_shape))(x)
     # loop over our number of filters again, but this time in
     # reverse order
     for f in filters[::-1]:

@@ -5,6 +5,11 @@ __pycache__/
 
 #data
 data/
+models/
+sizes/
+thresholds/
+comparison_images/
+checkpoints/
 redrawn_images.zip
 archive.zip
 

@@ -25,7 +25,7 @@ parser = argparse.ArgumentParser(description='''This program allows you to train
                                  model rather a multi-class model''')
 parser.add_argument('--name', type=str, default='hazelnut', help='object class to train model for')
 parser.add_argument('--epochs', type=int, default=10, help='number of epochs for model training')
-parser.add_argument('--batch_size', type=int, default=64, help='batch size for model training')
+parser.add_argument('--batch_size', type=int, default=16, help='batch size for model training')
 parser.add_argument('--img_size', type=int, default=256, help='image size for for model input & output')
 parser.add_argument('--aug_to', type=int, default=2000, help='number of datapoints to augment the input size to')
 parser.add_argument('--threshold_percentile', type=float, default=99.0,
@@ -79,7 +79,7 @@ def read_defect(filepaths: list[str]) -> list[str]:
     """
     defects = []
     for file in filepaths:
-        defects.append(file.split('\\')[-2])
+        defects.append(file.split(os.sep)[-2])
     return defects
 
 
@@ -418,6 +418,10 @@ if __name__ == '__main__':
                     original)
 
     print('Saving model, threshold map and other variables...')
+    os.makedirs('models', exist_ok=True)
+    os.makedirs('thresholds', exist_ok=True)
+    os.makedirs('sizes', exist_ok=True)
+    
     autoencoder.save(os.path.join('models', 'model_' + NAME + '.h5'))
     # Open a file and use dump() 
     with open(os.path.join('thresholds', 'thresholds_' + NAME + '.pkl'), 'wb') as file:
