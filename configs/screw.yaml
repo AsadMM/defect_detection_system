@@ -1,0 +1,8 @@
+name: screw
+epochs: 10
+batch_size: 8
+img_size: 128
+aug_to: 2000
+filters: [32, 64, 96]
+latent_dim: 100
+threshold_percentile: 99

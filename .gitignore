@@ -5,7 +5,7 @@ __pycache__/
 *.db
 
 #data
-data/
+/data/
 comparison_images/
 mlruns/
 redrawn_images.zip

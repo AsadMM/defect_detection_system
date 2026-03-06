@@ -15,14 +15,18 @@ configure_environment()
 
 
 from src.models.autoencoder import build1
-from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, Callback
+from src.models.threshold import get_threshold, get_results
+from src.models.evaluation import group_test_results
+from src.data.dataset_loader import get_filenames, read_images, read_defect
+from src.data.augmentation import augment_images
+from src.training.trainer import train_autoencoder
+from src.utils.visualization import get_drawn_results
+from tensorflow.keras.callbacks import Callback
 import tensorflow as tf
 import mlflow
 import mlflow.keras
-from sklearn.model_selection import train_test_split
 import numpy as np
 import pickle
-from glob import glob
 import cv2
 import argparse
 
@@ -49,6 +53,58 @@ parser.add_argument('--filters', nargs='+', type=int, default=[32, 64, 96],
                     help="filters for the network. each filter will create an additional layer")
 parser.add_argument('--latent_dim', type=int, default=100,
                     help='latent dimension for the code-space (bottleneck) of the autoencoder')
+parser.add_argument('--config', type=str, default=None,
+                    help='path to a YAML config file with training parameters')
+
+
+def load_yaml_config(config_path: str) -> dict:
+    """
+    Loads YAML configuration file.
+
+    Parameters
+    ----------
+    config_path : str
+        Path to YAML config.
+
+    Returns
+    -------
+    dict
+        Configuration dictionary.
+    """
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ImportError("PyYAML is required when using --config. Install with `pip install pyyaml`.") from exc
+
+    with open(config_path, 'r', encoding='utf-8') as file:
+        config = yaml.safe_load(file) or {}
+    if not isinstance(config, dict):
+        raise ValueError(f"Config file must contain a YAML mapping/object at root: {config_path}")
+    return config
+
+
+def apply_config_overrides(args: argparse.Namespace, config: dict, parser: argparse.ArgumentParser) -> argparse.Namespace:
+    """
+    Overrides parsed CLI args with values from YAML config.
+
+    Notes
+    -----
+    - Values in config override values from CLI when both are provided.
+    - Supports legacy `dataset` key as alias for `name`.
+    """
+    config_values = dict(config)
+    if 'dataset' in config_values and 'name' not in config_values:
+        config_values['name'] = config_values['dataset']
+    config_values.pop('dataset', None)
+
+    valid_keys = {action.dest for action in parser._actions if action.dest != 'help'}
+    unknown_keys = sorted(set(config_values.keys()) - valid_keys)
+    if unknown_keys:
+        raise ValueError(f"Unsupported config keys: {unknown_keys}. Supported keys: {sorted(valid_keys)}")
+
+    for key, value in config_values.items():
+        setattr(args, key, value)
+    return args
 
 
 class MLflowMetricsLogger(Callback):
@@ -61,299 +117,14 @@ class MLflowMetricsLogger(Callback):
 
 
 
-def get_filenames(name: str, t: str = 'train') -> list[str]:
-    """
-    Returns the image filepaths for the given object class.
-
-    Parameters
-    ----------
-    name : str
-        Object class name.
-    t : str, optional
-        Training or testing images. The default is 'train'.
-
-    Returns
-    -------
-    list[str]
-        A list of matched-paths from glob module.
-
-    """
-    if t == 'train':
-        files = glob(os.path.join('data', 'mvtec', name, 'train', 'good', '*.png'))
-        return files
-    elif t == 'test':
-        files = glob(os.path.join('data', 'mvtec', name, 'test', '*', '*.png'))
-        return files
-
-
-def read_defect(filepaths: list[str]) -> list[str]:
-    """
-    Returns the ground-truth defect for each image in the test set.
-
-    Parameters
-    ----------
-    filepaths : list[str]
-        Image filepaths.
-
-    Returns
-    -------
-    list[str]
-        Defects as stated in the folder.
-
-    """
-    defects = []
-    for file in filepaths:
-        defects.append(file.split(os.sep)[-2])
-    return defects
-
-
-def read_images(filepaths: list[str], size: int) -> np.ndarray:
-    """
-    Returns the resized, floating point read images.
-
-    Parameters
-    ----------
-    filepaths : list[str]
-        Images to read.
-    size : int
-        Size to be resized to.
-
-    Returns
-    -------
-    array_images : numpy.ndarray
-        Numpy array of the images.
-
-    """
-    images = []
-    for file in filepaths:
-        img = cv2.imread(file)
-        if img.shape[:2] != (size, size):
-            img = cv2.resize(img, (size, size))
-        images.append(img)
-    array_images = np.array(images)
-    array_images = array_images / 255.
-    return array_images
-
-
-def crop_image(image: np.ndarray, crops: tuple | list) -> np.ndarray:
-    """
-    Returns an augmented image with given crop.
-
-    Parameters
-    ----------
-    image : np.ndarray
-        Original image.
-    crops : tuple|list
-        Crop limits.
-
-    Returns
-    -------
-    image : np.ndarray
-        Cropped image.
-
-    """
-    image = image[crops[0]:, crops[1]:]
-    image = cv2.resize(image, (IMG_SIZE, IMG_SIZE))
-    return image
-
-
-def rotate_image(img: np.ndarray, angle: float) -> np.ndarray:
-    """
-    Returns an augmented image with the given rotation.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Original image.
-    angle : float
-        Rotation angle.
-
-    Returns
-    -------
-    img_rotated : np.ndarray
-        Rotated image.
-
-    """
-    h, w = img.shape[:2]
-    angle %= 360
-    M_rotate = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1)
-    img_rotated = cv2.warpAffine(img, M_rotate, (w, h))
-    return img_rotated
-
-
-def flip_image(image: np.ndarray, flip: int) -> np.ndarray:
-    """
-    Returns an augmented image with given flip direction.
-
-    Parameters
-    ----------
-    image : np.ndarray
-        Original image.
-    flip : int
-        Flip direction (0 is horizontal, 1 is vertical, -1 is both).
-
-    Returns
-    -------
-    image : np.ndarray
-        Flipped image.
-
-    """
-    image = cv2.flip(image, flip)
-    return image
-
-
-def augment_images(imgs: np.ndarray, aug_size: int) -> np.ndarray:
-    """
-    Returns the augmented images based on the input images.
-
-    No of images augmented images generated is based on the difference
-    between the size of input images and the augmented size needed.
-
-    Parameters
-    ----------
-    imgs : np.ndarray
-        Input images.
-    aug_size : int
-        Final augment size needed.
-
-    Returns
-    -------
-    np.ndarray
-        Numpy array of Augmented images.
-
-    """
-    aug_images = []
-    j = 0
-    for i in range(aug_size - imgs.shape[0]):
-        # choose a random augment operation to be performed
-        choice = np.random.randint(1, 4)
-        if choice == 1:
-            angle = np.random.randint(ROTATE_LIMIT[0], ROTATE_LIMIT[1] + 1)
-            img = rotate_image(imgs[j], angle)
-        elif choice == 2:
-            crop_size = np.random.randint(CROP_LIMIT + 1)
-            img = crop_image(imgs[j], (crop_size, crop_size))
-        else:
-            flip = np.random.randint(-1, 2)
-            img = flip_image(imgs[j], flip)
-        aug_images.append(img)
-        # circular index
-        j = (j + 1) % imgs.shape[0]
-    return np.array(aug_images)
-
-
-def get_threshold(validation: np.ndarray, predicted: np.ndarray) -> dict[float, float]:
-    """
-    Estimate the threshold based on the validation set
-
-    Parameters
-    ----------
-    validation : np.ndarray
-        Validation data set.
-    predicted : np.ndarray
-        Predicted images of the validation data set.
-
-    Returns
-    -------
-    threshold : dict{float:float}
-        Estimated threshold values
-    """
-    residual_maps = []
-    # percentiles to calculate and store for API
-    percentiles = np.arange(90, 100, 0.1)
-    for val, pred in zip(validation, predicted):
-        # Residual map calculation. Mean across 3 channels
-        res_map = np.mean(np.power(val - pred, 2), axis=2)
-        residual_maps.append(res_map)
-    thresholds = np.percentile(residual_maps, percentiles)
-    thresholds_dict = {round(percentile, 1): threshold for percentile, threshold in zip(percentiles, thresholds)}
-    return thresholds_dict
-
-
-def get_results(images: np.ndarray, predicted: np.ndarray, threshold: float) -> np.ndarray:
-    """
-    Returns the masked images with anomalous points.
-
-    The images contains 0 and 1, pixels are set to 1 which is greater
-    than the given threshold for anomaly detection.
-
-    Parameters
-    ----------
-    images : np.ndarray
-        Original test images.
-    predicted : np.ndarray
-        Model output images.
-    threshold : float
-        Threshold for anomaly detection.
-
-    Returns
-    -------
-    masked_images : np.ndarray
-        Numpy array of masked images with anomalous pixel set to 1.
-
-    """
-    output_images = []
-    size = images.shape[1:3]
-    for image, pred in zip(images, predicted):
-        res_map = np.mean(np.power(image - pred, 2), axis=2)
-        mask = np.zeros(size)
-        mask[res_map > threshold] = 1
-        output_images.append(mask)
-    return np.array(output_images)
-
-
-def convert_int(images: np.ndarray) -> np.ndarray:
-    """
-    Returns original images with ints
-
-    Parameters
-    ----------
-    images : np.ndarray
-        images with floats.
-
-    Returns
-    -------
-    original_images : np.ndarray
-        Images with ints.
-    """
-    return (images * 255).astype(np.uint8)
-
-
-def get_drawn_results(images: np.ndarray, masked: np.ndarray,
-                      color: tuple[int, int, int] = (255, 0, 0), thickness: int = 1) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Returns original images with drawn anomalous points
-
-    Parameters
-    ----------
-    images : np.ndarray
-        original images.
-    masked : np.ndarray
-        masked results of the predicted images.
-    color : tuple[int, int, int], optional
-        color of the contours in BGR. default is blue (255, 0, 0)
-    thickness : int, optional
-        thickness of the drawn contours. default is 1
-    Returns
-    -------
-    redrawn_images : np.ndarray
-        Images with drawn anomalous points.
-    original_images : np.ndarray
-        Original images (converted back to int).
-    """
-    redrawn_imgs = []
-    images, masked = convert_int(images), convert_int(masked)
-    for img, mask in zip(images, masked):
-        contours, hierarchy = cv2.findContours(mask,
-                                               cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        redrawn_imgs.append(cv2.drawContours(img.copy(), contours, -1, color, thickness))
-    return np.array(redrawn_imgs), images
-
-
 if __name__ == '__main__':
     # parse the given command-line arguments
     # if not arguments just use the default values
     args = parser.parse_args()
+    if args.config:
+        config = load_yaml_config(args.config)
+        args = apply_config_overrides(args, config, parser)
+
     EPOCHS = args.epochs
     BS = args.batch_size
     NAME = args.name.lower()
@@ -380,7 +151,7 @@ if __name__ == '__main__':
     train_files = get_filenames(NAME, 'train')
     imgs = read_images(train_files, IMG_SIZE)
     print('Images read:', imgs.shape)
-    augmented_images = augment_images(imgs, AUG_TO)
+    augmented_images = augment_images(imgs, AUG_TO, ROTATE_LIMIT, CROP_LIMIT, IMG_SIZE)
     print('Augmented images created:', augmented_images.shape)
     training_imgs = np.vstack((imgs, augmented_images))
     print('Total training images:', training_imgs.shape)
@@ -389,24 +160,24 @@ if __name__ == '__main__':
     del imgs
     del augmented_images
 
-    train_data, validation_data = train_test_split(training_imgs, test_size=0.2,
-                                                   random_state=26)
-    # Freeing up memory
-    del training_imgs
     # construct our convolutional autoencoder
     print("building autoencoder...")
     autoencoder = build1(IMG_SIZE, IMG_SIZE, IMG_DEPTH, FILTERS, LATENT_DIM)
-    autoencoder.compile(loss="mse", optimizer="adam")
     autoencoder.summary()
+
     # train the convolutional autoencoder
-    earlyStopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
     mlflowMetricsLogger = MLflowMetricsLogger()
-    checkpoint = ModelCheckpoint(os.path.join('artifacts', 'checkpoints', NAME, '{epoch:02d}-{val_loss:.5f}.weights.h5'),
-                                 save_best_only=True, verbose=1, save_weights_only=True)
-    H = autoencoder.fit(
-        train_data, train_data,
-        validation_data=(validation_data, validation_data),
-        epochs=EPOCHS, batch_size=BS, callbacks=[checkpoint, earlyStopping, mlflowMetricsLogger])
+    train_config = {
+        'name': NAME,
+        'epochs': EPOCHS,
+        'batch_size': BS,
+        'test_size': 0.2,
+        'random_state': 26,
+        'callbacks': [mlflowMetricsLogger],
+    }
+    autoencoder, H, validation_data = train_autoencoder(autoencoder, training_imgs, train_config)
+    # Freeing up memory
+    del training_imgs
     # Estimate the threshold based on the validation set
     valid_predicted_imgs = autoencoder.predict(validation_data)
     thresholds_map = get_threshold(validation_data, valid_predicted_imgs)
@@ -428,17 +199,7 @@ if __name__ == '__main__':
     print('Listed test results:', test_results)
 
     # Group the results
-    # For defects the correct class is 'Predicted_1'
-    # For good the correct class is 'Predicted_0'
-    test_results_grouped = {}
-    for res, defect in test_results:
-        if test_results_grouped.get(defect) is None:
-            test_results_grouped[defect] = {'Total': 0, 'Predicted_0': 0, 'Predicted_1': 0}
-        test_results_grouped[defect]['Total'] += 1
-        if res == 0:
-            test_results_grouped[defect]['Predicted_0'] += 1
-        else:
-            test_results_grouped[defect]['Predicted_1'] += 1
+    test_results_grouped = group_test_results(test_results)
     print('Grouped test results:', test_results_grouped)
     print('Saving images...')
     if not os.path.exists(os.path.join('artifacts', 'comparison_images', NAME)):
