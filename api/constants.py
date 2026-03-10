@@ -1,0 +1,20 @@
+
+MUTLI_FILE_OPENAPI_SCHEMA = {
+        "requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                            }
+                        },
+                        "required": ["files"],
+                    }
+                }
+            },
+        }
+    }
