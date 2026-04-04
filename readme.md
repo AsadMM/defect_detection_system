@@ -1,287 +1,153 @@
-# Anomaly detection Autoencoder with MSE loss
+# Defect Detection System (Autoencoder + FastAPI)
 
-This is an implementation of L2 Autoencoder for Anomaly detection based on MVTEC-AD dataset.<br>
+An anomaly/defect detection service built on MVTEC-AD style data.
 
-## How to Train:
+- One model per object class (for localized defect masking/drawing)
+- FastAPI inference API with model registry/cache and MLflow integration
+- Training pipeline with configurable CLI/YAML settings and MLflow tracking
 
-use train.py to train the model for a specific object class. Training is customizable
-with options for batch_size, epochs, filters, etc from the command-line arguments
+## Architecture
 
-### Example:
+```text
+Client
+  -> FastAPI (api/main.py, api/routes.py)
+      -> Inference runtime (src/inference/serving.py)
+          -> Model cache + MLflow/local fallback
+          -> TensorFlow model inference
+      -> Response (array output or zipped images)
 
-- **bottle** object
-```bash
-python train.py --name bottle --epochs 50 --aug_to 10000 --filters 32 64 126 256
+Training (src/training/train.py)
+  -> Data loading + augmentation
+  -> Autoencoder training
+  -> Threshold estimation
+  -> Local artifacts + MLflow run/model registry
 ```
 
-## How to start fastAPI server:
+## Repository Layout
 
-use server.py to boot up the fastAPI server to infer the model
+- `api/` HTTP layer (routes, schemas, enums, constants)
+- `src/inference/` serving runtime (model registry, inference)
+- `src/training/` training pipeline
+- `src/data/` data loading + augmentation
+- `src/models/` model architecture + threshold logic
+- `artifacts/` local model, thresholds, sizes, checkpoints
+- `configs/` YAML training configs
+- `data/` dataset root (e.g., MVTEC)
 
-### Example:
+## Prerequisites
 
-```bash
-fastapi dev server.py
-```
+- Python 3.13
+- Docker (optional)
+- Dataset available under `data/`
+- At least one trained model in `artifacts/models` for API startup
 
-## Test the API
-
-Use swagger docs for executing image endpoint (127.0.0.1:8000/docs - "for dev mode").
-Run api_test.py to check the array endpoint using requests module.
-
-## Notes:
-
-Usually for anomaly detection you might expect one model for all the object class,
-while this might work when the requirement is to classify image as anomalous, 
-it's not suitable when you have to detect anomalous pixels/areas in the image.
-
-Hence, I've adopted a single-model per object class method, essentially training
-an autoencoder for every object-class. Used "MSE" loss.
-I've trained the model with limited augmented dataset (2000 total images)
-with 256*256 dimensions as this was the maximum I could fit in my memory.
-I've trained models for 3 object classes for the prototype.
-Training is easily customizable with command-line arguments.
-API supports endpoints for image inputs as well as array inputs.
-
-Also for train.py to work the working-directory should contain "data" folder
-containing the MVTEC-AD dataset with the following structure
+## Install (Local Python)
 
 ```bash
-├───data
-│   ├───bottle
-│   │   ├───ground_truth
-│   │   │   ├───broken_large
-│   │   │   ├───broken_small
-│   │   │   └───contamination
-│   │   ├───test
-│   │   │   ├───broken_large
-│   │   │   ├───broken_small
-│   │   │   ├───contamination
-│   │   │   └───good
-│   │   └───train
-│   │       └───good
-│   ├───cable
-│   │   ├───ground_truth
-│   │   │   ├───bent_wire
-│   │   │   ├───cable_swap
-│   │   │   ├───combined
-│   │   │   ├───cut_inner_insulation
-│   │   │   ├───cut_outer_insulation
-│   │   │   ├───missing_cable
-│   │   │   ├───missing_wire
-│   │   │   └───poke_insulation
-│   │   ├───test
-│   │   │   ├───bent_wire
-│   │   │   ├───cable_swap
-│   │   │   ├───combined
-│   │   │   ├───cut_inner_insulation
-│   │   │   ├───cut_outer_insulation
-│   │   │   ├───good
-│   │   │   ├───missing_cable
-│   │   │   ├───missing_wire
-│   │   │   └───poke_insulation
-│   │   └───train
-│   │       └───good
-│   ├───capsule
-│   │   ├───ground_truth
-│   │   │   ├───crack
-│   │   │   ├───faulty_imprint
-│   │   │   ├───poke
-│   │   │   ├───scratch
-│   │   │   └───squeeze
-│   │   ├───test
-│   │   │   ├───crack
-│   │   │   ├───faulty_imprint
-│   │   │   ├───good
-│   │   │   ├───poke
-│   │   │   ├───scratch
-│   │   │   └───squeeze
-│   │   └───train
-│   │       └───good
-│   ├───carpet
-│   │   ├───ground_truth
-│   │   │   ├───color
-│   │   │   ├───cut
-│   │   │   ├───hole
-│   │   │   ├───metal_contamination
-│   │   │   └───thread
-│   │   ├───test
-│   │   │   ├───color
-│   │   │   ├───cut
-│   │   │   ├───good
-│   │   │   ├───hole
-│   │   │   ├───metal_contamination
-│   │   │   └───thread
-│   │   └───train
-│   │       └───good
-│   ├───grid
-│   │   ├───ground_truth
-│   │   │   ├───bent
-│   │   │   ├───broken
-│   │   │   ├───glue
-│   │   │   ├───metal_contamination
-│   │   │   └───thread
-│   │   ├───test
-│   │   │   ├───bent
-│   │   │   ├───broken
-│   │   │   ├───glue
-│   │   │   ├───good
-│   │   │   ├───metal_contamination
-│   │   │   └───thread
-│   │   └───train
-│   │       └───good
-│   ├───hazelnut
-│   │   ├───ground_truth
-│   │   │   ├───crack
-│   │   │   ├───cut
-│   │   │   ├───hole
-│   │   │   └───print
-│   │   ├───test
-│   │   │   ├───crack
-│   │   │   ├───cut
-│   │   │   ├───good
-│   │   │   ├───hole
-│   │   │   └───print
-│   │   └───train
-│   │       └───good
-│   ├───leather
-│   │   ├───ground_truth
-│   │   │   ├───color
-│   │   │   ├───cut
-│   │   │   ├───fold
-│   │   │   ├───glue
-│   │   │   └───poke
-│   │   ├───test
-│   │   │   ├───color
-│   │   │   ├───cut
-│   │   │   ├───fold
-│   │   │   ├───glue
-│   │   │   ├───good
-│   │   │   └───poke
-│   │   └───train
-│   │       └───good
-│   ├───metal_nut
-│   │   ├───ground_truth
-│   │   │   ├───bent
-│   │   │   ├───color
-│   │   │   ├───flip
-│   │   │   └───scratch
-│   │   ├───test
-│   │   │   ├───bent
-│   │   │   ├───color
-│   │   │   ├───flip
-│   │   │   ├───good
-│   │   │   └───scratch
-│   │   └───train
-│   │       └───good
-│   ├───pill
-│   │   ├───ground_truth
-│   │   │   ├───color
-│   │   │   ├───combined
-│   │   │   ├───contamination
-│   │   │   ├───crack
-│   │   │   ├───faulty_imprint
-│   │   │   ├───pill_type
-│   │   │   └───scratch
-│   │   ├───test
-│   │   │   ├───color
-│   │   │   ├───combined
-│   │   │   ├───contamination
-│   │   │   ├───crack
-│   │   │   ├───faulty_imprint
-│   │   │   ├───good
-│   │   │   ├───pill_type
-│   │   │   └───scratch
-│   │   └───train
-│   │       └───good
-│   ├───screw
-│   │   ├───ground_truth
-│   │   │   ├───manipulated_front
-│   │   │   ├───scratch_head
-│   │   │   ├───scratch_neck
-│   │   │   ├───thread_side
-│   │   │   └───thread_top
-│   │   ├───test
-│   │   │   ├───good
-│   │   │   ├───manipulated_front
-│   │   │   ├───scratch_head
-│   │   │   ├───scratch_neck
-│   │   │   ├───thread_side
-│   │   │   └───thread_top
-│   │   └───train
-│   │       └───good
-│   ├───tile
-│   │   ├───ground_truth
-│   │   │   ├───crack
-│   │   │   ├───glue_strip
-│   │   │   ├───gray_stroke
-│   │   │   ├───oil
-│   │   │   └───rough
-│   │   ├───test
-│   │   │   ├───crack
-│   │   │   ├───glue_strip
-│   │   │   ├───good
-│   │   │   ├───gray_stroke
-│   │   │   ├───oil
-│   │   │   └───rough
-│   │   └───train
-│   │       └───good
-│   ├───toothbrush
-│   │   ├───ground_truth
-│   │   │   └───defective
-│   │   ├───test
-│   │   │   ├───defective
-│   │   │   └───good
-│   │   └───train
-│   │       └───good
-│   ├───transistor
-│   │   ├───ground_truth
-│   │   │   ├───bent_lead
-│   │   │   ├───cut_lead
-│   │   │   ├───damaged_case
-│   │   │   └───misplaced
-│   │   ├───test
-│   │   │   ├───bent_lead
-│   │   │   ├───cut_lead
-│   │   │   ├───damaged_case
-│   │   │   ├───good
-│   │   │   └───misplaced
-│   │   └───train
-│   │       └───good
-│   ├───wood
-│   │   ├───ground_truth
-│   │   │   ├───color
-│   │   │   ├───combined
-│   │   │   ├───hole
-│   │   │   ├───liquid
-│   │   │   └───scratch
-│   │   ├───test
-│   │   │   ├───color
-│   │   │   ├───combined
-│   │   │   ├───good
-│   │   │   ├───hole
-│   │   │   ├───liquid
-│   │   │   └───scratch
-│   │   └───train
-│   │       └───good
-│   └───zipper
-│       ├───ground_truth
-│       │   ├───broken_teeth
-│       │   ├───combined
-│       │   ├───fabric_border
-│       │   ├───fabric_interior
-│       │   ├───rough
-│       │   ├───split_teeth
-│       │   └───squeezed_teeth
-│       ├───test
-│       │   ├───broken_teeth
-│       │   ├───combined
-│       │   ├───fabric_border
-│       │   ├───fabric_interior
-│       │   ├───good
-│       │   ├───rough
-│       │   ├───split_teeth
-│       │   └───squeezed_teeth
-│       └───train
-│           └───good
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
+
+## Run API (Dev)
+
+```bash
+uvicorn api.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+- Swagger: `http://127.0.0.1:8000/docs`
+- ReDoc: `http://127.0.0.1:8000/redoc`
+
+## Run API (Prod-style)
+
+CPU-oriented example:
+
+```bash
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2
+```
+
+Single-GPU machines (limited VRAM):
+
+```bash
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+
+## Run with Docker
+
+Build:
+
+```bash
+docker build -t defect-detector:latest .
+```
+
+Run:
+
+```bash
+docker run --rm -p 8000:8000 defect-detector:latest
+```
+
+Open docs at `http://127.0.0.1:8000/docs`.
+
+## MLflow
+
+Training and serving use:
+
+- Tracking URI: `sqlite:///artifacts/mlflow/mlflow.db`
+- Experiment: `autoencoder_anomaly_detection`
+
+Start MLflow UI:
+
+```bash
+mlflow ui --backend-store-uri sqlite:///artifacts/mlflow/mlflow.db --host 127.0.0.1 --port 5000
+```
+
+Open: `http://127.0.0.1:5000`
+
+## Training
+
+Short form:
+
+```bash
+python3 -m src.training.train --config configs/screw.yaml
+```
+
+CLI form:
+
+```bash
+python3 -m src.training.train \
+  --name screw \
+  --epochs 20 \
+  --batch_size 8 \
+  --img_size 128 \
+  --aug_to 2000 \
+  --rotate_min -45 \
+  --rotate_max 45 \
+  --crop_limit 100 \
+  --test_size 0.2 \
+  --threshold_percentile 99 \
+  --filters 32 64 96 \
+  --latent_dim 100 \
+  --seed 26
+```
+
+For full training docs (all options + YAML mapping), see:
+
+- [docs/training.md](docs/training.md)
+
+## API Endpoints
+
+- `POST /predict_array/{model_name}`
+- `POST /predict_image/{model_name}`
+
+Both endpoints support:
+
+- `stage` / `version` model selection
+- threshold selection (`90.0 <= threshold < 100`)
+- output format (`mask` or `redrawn`)
+
+## Notes
+
+- API startup intentionally fails if no models are available in artifacts.
+- `requirements.txt` is a slim direct-dependency file.
+- `requirements.lock.txt` pins the full environment snapshot.

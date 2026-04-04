@@ -56,6 +56,10 @@ parser.add_argument('--img_size', type=int, default=256, help='image size for fo
 parser.add_argument('--aug_to', type=int, default=2000, help='number of datapoints to augment the input size to')
 parser.add_argument('--threshold_percentile', type=float, default=99.0,
                     help='threshold percentile for estimating threshold')
+parser.add_argument('--rotate_min', type=int, default=-45, help='minimum augmentation rotation angle')
+parser.add_argument('--rotate_max', type=int, default=45, help='maximum augmentation rotation angle')
+parser.add_argument('--crop_limit', type=int, default=100, help='maximum augmentation crop size')
+parser.add_argument('--test_size', type=float, default=0.2, help='validation split ratio for train/test split')
 parser.add_argument('--filters', nargs='+', type=int, default=[32, 64, 96],
                     help="filters for the network. each filter will create an additional layer")
 parser.add_argument('--latent_dim', type=int, default=100,
@@ -177,8 +181,9 @@ if __name__ == '__main__':
     IMG_SIZE = args.img_size
     IMG_DEPTH = 3
     AUG_TO = args.aug_to
-    ROTATE_LIMIT = (-45, 45)
-    CROP_LIMIT = 100
+    ROTATE_LIMIT = (args.rotate_min, args.rotate_max)
+    CROP_LIMIT = args.crop_limit
+    TEST_SIZE = args.test_size
     THRESH_PERCENTILE = args.threshold_percentile
     FILTERS = args.filters
     LATENT_DIM = args.latent_dim
@@ -189,6 +194,13 @@ if __name__ == '__main__':
     np.random.seed(SEED)
     tf.random.set_seed(SEED)
     logger.info("Using global random seed=%d", SEED)
+    if ROTATE_LIMIT[0] > ROTATE_LIMIT[1]:
+        raise ValueError(f"rotate_min ({ROTATE_LIMIT[0]}) must be <= rotate_max ({ROTATE_LIMIT[1]})")
+    if CROP_LIMIT < 0:
+        raise ValueError("crop_limit must be >= 0")
+    if not 0 < TEST_SIZE < 1:
+        raise ValueError(f"test_size must be between 0 and 1 (exclusive), got {TEST_SIZE}")
+
     mlflow.set_tracking_uri("sqlite:///artifacts/mlflow/mlflow.db")
     mlflow.set_experiment("autoencoder_anomaly_detection")
 
@@ -204,6 +216,7 @@ if __name__ == '__main__':
             mlflow.log_param('threshold_percentile', THRESH_PERCENTILE)
             mlflow.log_param('rotate_limit', ROTATE_LIMIT)
             mlflow.log_param('crop_limit', CROP_LIMIT)
+            mlflow.log_param('test_size', TEST_SIZE)
             mlflow.log_param('seed', SEED)
 
             logger.info("Reading files for %s", NAME)
@@ -230,7 +243,7 @@ if __name__ == '__main__':
                 'name': NAME,
                 'epochs': EPOCHS,
                 'batch_size': BS,
-                'test_size': 0.2,
+                'test_size': TEST_SIZE,
                 'random_state': SEED,
                 'callbacks': [mlflowMetricsLogger],
             }

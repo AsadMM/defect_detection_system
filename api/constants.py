@@ -1,20 +1,37 @@
+import os
 
-MUTLI_FILE_OPENAPI_SCHEMA = {
-        "requestBody": {
-            "required": True,
-            "content": {
-                "multipart/form-data": {
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "files": {
-                                "type": "array",
-                                "items": {"type": "string", "format": "binary"},
-                            }
-                        },
-                        "required": ["files"],
-                    }
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+MAX_ARRAY_BATCH_SIZE = _get_positive_int_env("MAX_ARRAY_BATCH_SIZE", 32)
+MAX_IMAGE_BATCH_SIZE = _get_positive_int_env("MAX_IMAGE_BATCH_SIZE", 16)
+
+
+MULTI_FILE_OPENAPI_SCHEMA = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "binary"},
+                        }
+                    },
+                    "required": ["files"],
                 }
-            },
-        }
+            }
+        },
     }
+}

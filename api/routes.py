@@ -8,18 +8,22 @@ import numpy as np
 from fastapi import APIRouter, File, HTTPException, Path, Query, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
-from api.exceptions import ModelMetadataError, UnknownModelError
 from api.enums import AnomalyColor, ArrayOutputFormat, ModelName, ModelStage
-from api.constants import MUTLI_FILE_OPENAPI_SCHEMA
+from api.constants import MAX_ARRAY_BATCH_SIZE, MAX_IMAGE_BATCH_SIZE, MULTI_FILE_OPENAPI_SCHEMA
 from api.schemas import ArrayInput
-from api.services import (
-    model_registry,
-    run_inference,
-)
+from src.inference.exceptions import ModelMetadataError, UnknownModelError
+from src.inference.serving import model_registry, run_inference
 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def error_detail(code: str, message: str, details: str | None = None) -> dict[str, str]:
+    payload = {"code": code, "message": message}
+    if details:
+        payload["details"] = details
+    return payload
 
 
 def prepare_array_images(data: list[list[int]], img_size: tuple[int, int]) -> np.ndarray:
@@ -52,7 +56,24 @@ def encode_zip_images(filenames: list[str], output: np.ndarray, model_name: str)
     return zip_buffer.getvalue()
 
 
-@router.post("/predict_array/{model_name}", tags=["predict_array_input"])
+def flatten_output_array(output: np.ndarray) -> list[list[int]]:
+    return [np.ravel(out).tolist() for out in output]
+
+
+@router.post(
+    "/predict_array/{model_name}",
+    tags=["predict_array_input"],
+    summary="Run anomaly inference on flattened array inputs",
+    description=(
+        "Accepts a batch of flattened BGR uint8-like arrays, reshapes each item to the model input size, "
+        "runs anomaly inference, and returns either mask or redrawn outputs in flattened array form."
+    ),
+    responses={
+        400: {"description": "Invalid request payload, invalid selector combination, or batch-size limit exceeded"},
+        404: {"description": "Requested model is not available"},
+        503: {"description": "Model metadata unavailable for serving"},
+    },
+)
 async def predict_array_input(
     request: ArrayInput,
     model_name: Annotated[ModelName, Path(title="The model for the input object class")],
@@ -63,7 +84,13 @@ async def predict_array_input(
     redraw_color: AnomalyColor = AnomalyColor.blue,
 ):
     if version is not None and stage != ModelStage.production:
-        raise HTTPException(status_code=400, detail="Provide either version or stage, not both")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "INVALID_MODEL_SELECTOR",
+                "Provide either version or stage, not both",
+            ),
+        )
 
     logger.info("Received request for model=%s", model_name.value)
     try:
@@ -73,18 +100,37 @@ async def predict_array_input(
             redraw_color.value,
         )
     except UnknownModelError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("MODEL_NOT_FOUND", "Requested model is not available", str(exc)),
+        ) from exc
     except ModelMetadataError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail("MODEL_METADATA_UNAVAILABLE", "Model metadata is unavailable", str(exc)),
+        ) from exc
     flat_size = img_size[0] * img_size[0] * img_size[1]
     logger.info("Batch size: %d", len(request.data))
+    if len(request.data) > MAX_ARRAY_BATCH_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "BATCH_SIZE_LIMIT_EXCEEDED",
+                "Array batch size exceeds allowed maximum",
+                f"max_batch_size={MAX_ARRAY_BATCH_SIZE}, received={len(request.data)}",
+            ),
+        )
 
     if not all(len(d) == flat_size for d in request.data):
         logger.warning("Invalid input size for model=%s", model_name.value)
         logger.error("Failed request for model=%s", model_name.value)
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid input data length in of the request. Expected flat size is {flat_size}",
+            detail=error_detail(
+                "INVALID_INPUT_LENGTH",
+                "Input length does not match model input size",
+                f"Expected flattened size {flat_size} per item",
+            ),
         )
 
     try:
@@ -92,14 +138,23 @@ async def predict_array_input(
     except ValueError as exc:
         logger.warning("Invalid input size for model=%s", model_name.value)
         logger.error("Failed request for model=%s", model_name.value)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail("INVALID_INPUT_VALUES", "Input values are invalid", str(exc)),
+        ) from exc
 
     try:
         model = await run_in_threadpool(model_registry.get_model, model_name.value, version, stage.value)
     except UnknownModelError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("MODEL_NOT_FOUND", "Requested model is not available", str(exc)),
+        ) from exc
     except ModelMetadataError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail("MODEL_METADATA_UNAVAILABLE", "Model metadata is unavailable", str(exc)),
+        ) from exc
     output = await run_in_threadpool(
         run_inference,
         images,
@@ -110,13 +165,25 @@ async def predict_array_input(
         color,
     )
 
-    return {"output": [np.ravel(out).tolist() for out in output]}
+    flattened_output = await run_in_threadpool(flatten_output_array, output)
+    return {"output": flattened_output}
 
 
 @router.post(
     "/predict_image/{model_name}",
     tags=["predict_image_input"],
-    openapi_extra=MUTLI_FILE_OPENAPI_SCHEMA,
+    openapi_extra=MULTI_FILE_OPENAPI_SCHEMA,
+    summary="Run anomaly inference on uploaded image files",
+    description=(
+        "Accepts a batch of uploaded image files (multipart/form-data), resizes them to model input size, "
+        "runs anomaly inference, and returns a ZIP containing either masks or redrawn images."
+    ),
+    responses={
+        400: {"description": "Invalid request payload, image decode failure, invalid selector, or batch-size limit exceeded"},
+        404: {"description": "Requested model is not available"},
+        500: {"description": "Failed while encoding response images"},
+        503: {"description": "Model metadata unavailable for serving"},
+    },
 )
 async def predict_image_input(
     model_name: Annotated[ModelName, Path(title="The model for the input object class")],
@@ -128,12 +195,27 @@ async def predict_image_input(
     redraw_color: AnomalyColor = AnomalyColor.blue,
 ):
     if version is not None and stage != ModelStage.production:
-        raise HTTPException(status_code=400, detail="Provide either version or stage, not both")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "INVALID_MODEL_SELECTOR",
+                "Provide either version or stage, not both",
+            ),
+        )
 
     logger.info("Received request for model=%s", model_name.value)
     images = []
     filenames = []
     logger.info("Batch size: %d", len(files))
+    if len(files) > MAX_IMAGE_BATCH_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "BATCH_SIZE_LIMIT_EXCEEDED",
+                "Image batch size exceeds allowed maximum",
+                f"max_batch_size={MAX_IMAGE_BATCH_SIZE}, received={len(files)}",
+            ),
+        )
 
     try:
         img_size, threshold_value, color = model_registry.get_model_context(
@@ -142,9 +224,15 @@ async def predict_image_input(
             redraw_color.value,
         )
     except UnknownModelError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("MODEL_NOT_FOUND", "Requested model is not available", str(exc)),
+        ) from exc
     except ModelMetadataError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail("MODEL_METADATA_UNAVAILABLE", "Model metadata is unavailable", str(exc)),
+        ) from exc
 
     for file in files:
         contents = await file.read()
@@ -153,7 +241,14 @@ async def predict_image_input(
         except ValueError:
             logger.warning("Invalid input size for model=%s", model_name.value)
             logger.error("Failed request for model=%s", model_name.value)
-            raise HTTPException(status_code=400, detail=f"Failed to decode image {file.filename}")
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "IMAGE_DECODE_FAILED",
+                    "Failed to decode uploaded image",
+                    f"filename={file.filename}",
+                ),
+            )
         images.append(image)
         filenames.append(file.filename)
 
@@ -161,9 +256,15 @@ async def predict_image_input(
     try:
         model = await run_in_threadpool(model_registry.get_model, model_name.value, version, stage.value)
     except UnknownModelError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail("MODEL_NOT_FOUND", "Requested model is not available", str(exc)),
+        ) from exc
     except ModelMetadataError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=error_detail("MODEL_METADATA_UNAVAILABLE", "Model metadata is unavailable", str(exc)),
+        ) from exc
     output = await run_in_threadpool(
         run_inference,
         images,
@@ -181,7 +282,10 @@ async def predict_image_input(
     try:
         zip_bytes = await run_in_threadpool(encode_zip_images, filenames, output, model_name.value)
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail("IMAGE_ENCODING_FAILED", "Failed to encode output image", str(exc)),
+        ) from exc
 
     return Response(
         zip_bytes,

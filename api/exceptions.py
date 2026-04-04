@@ -1,6 +1,6 @@
-class UnknownModelError(KeyError):
-    """Raised when a requested model name is not known to the registry."""
+from src.inference.exceptions import ModelMetadataError, UnknownModelError
 
-
-class ModelMetadataError(KeyError):
-    """Raised when model metadata is missing or inconsistent."""
+__all__ = [
+    "UnknownModelError",
+    "ModelMetadataError",
+]

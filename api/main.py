@@ -9,9 +9,13 @@ from src.utils.logging import setup_logging
 
 setup_logging()
 
-from api.services import model_registry
+from src.inference.serving import model_registry
 
 model_registry.load_metadata()
+if not model_registry.available_models:
+    raise RuntimeError(
+        "No model metadata found in artifacts. At least one trained model is required to start the API."
+    )
 
 from api.routes import router
 

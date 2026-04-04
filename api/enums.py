@@ -1,6 +1,6 @@
 from enum import Enum
 
-from api.services import model_registry
+from src.inference.serving import model_registry
 
 
 def build_model_enum(names: set[str]) -> type[Enum]:
