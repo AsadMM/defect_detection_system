@@ -9,6 +9,10 @@ from src.utils.logging import setup_logging
 
 setup_logging()
 
+from api.services import load_metadata
+
+load_metadata()
+
 from api.routes import router
 
 

@@ -12,7 +12,6 @@ from api.constants import MUTLI_FILE_OPENAPI_SCHEMA
 from api.schemas import ArrayInput
 from api.services import (
     get_model_context,
-    models,
     run_inference,
 )
 
@@ -51,7 +50,6 @@ async def predict_array_input(
     images = images.astype("uint8") / 255.0
     output = run_inference(
         images,
-        models[model_name.value],
         model_name.value,
         threshold_value,
         output_format.value,
@@ -95,7 +93,6 @@ async def predict_image_input(
     images = np.array(images) / 255.0
     output = run_inference(
         images,
-        models[model_name.value],
         model_name.value,
         threshold_value,
         output_format.value,

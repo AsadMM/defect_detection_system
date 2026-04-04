@@ -6,7 +6,7 @@ from api.services import AVAILABLE_MODEL_NAMES
 def build_model_enum(names: set[str]) -> type[Enum]:
     values = sorted(names)
     if not values:
-        raise RuntimeError("No models were loaded from artifacts; cannot build ModelName enum.")
+        raise RuntimeError("No model metadata available; cannot build ModelName enum.")
     members = {name: name for name in values}
     return Enum("ModelName", members, type=str)
 
