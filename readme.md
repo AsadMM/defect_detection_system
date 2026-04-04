@@ -72,6 +72,18 @@ Single-GPU machines (limited VRAM):
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
+### Runtime guardrails (env vars)
+
+```bash
+export MAX_ARRAY_BATCH_SIZE=32
+export MAX_IMAGE_BATCH_SIZE=16
+export MODEL_CACHE_MAX_BYTES=1073741824
+export MLFLOW_TRACKING_URI=sqlite:///artifacts/mlflow/mlflow.db
+```
+
+- `MODEL_CACHE_MAX_BYTES` controls in-memory model cache budget (default: `1073741824` = 1 GiB).
+- Cache policy is LRU by model key (`name + stage/version`); oldest cached model is evicted first when capacity is exceeded.
+
 
 ## Run with Docker
 
@@ -134,6 +146,10 @@ python3 -m src.training.train \
 For full training docs (all options + YAML mapping), see:
 
 - [docs/training.md](docs/training.md)
+
+Load/performance test notes and baseline numbers:
+
+- [docs/load-testing.md](docs/load-testing.md)
 
 ## API Endpoints
 

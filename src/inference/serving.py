@@ -3,6 +3,7 @@ import os
 import pickle
 import threading
 import time
+from collections import OrderedDict
 from typing import Any
 
 import numpy as np
@@ -28,9 +29,23 @@ logger = logging.getLogger(__name__)
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///artifacts/mlflow/mlflow.db")
 
 
+def _get_positive_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 class ModelRegistryService:
     def __init__(self):
-        self.models: dict[tuple[str, str], Any] = {}
+        self.models: OrderedDict[tuple[str, str], Any] = OrderedDict()
+        self.model_cache_bytes: dict[tuple[str, str], int] = {}
+        self.model_cache_total_bytes = 0
+        self.max_model_cache_bytes = _get_positive_int_env("MODEL_CACHE_MAX_BYTES", 1_073_741_824)
         self.sizes: dict[str, tuple[int, int]] = {}
         self.threshold_maps: dict[str, dict[float, float]] = {}
         self.available_models: set[str] = set()
@@ -39,6 +54,67 @@ class ModelRegistryService:
         if mlflow is not None:
             mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
             logger.info("MLflow tracking URI set to %s", MLFLOW_TRACKING_URI)
+        logger.info("Model cache max size set to %.2f MB", self.max_model_cache_bytes / (1024 * 1024))
+
+    def _estimate_model_size_bytes(self, model: Any) -> int:
+        # Approximate model memory usage from parameters.
+        try:
+            params = int(model.count_params())
+            if params > 0:
+                return params * 4  # float32 approximation
+        except Exception:
+            pass
+
+        # Fallback for uncommon model wrappers.
+        try:
+            total = 0
+            for var in model.weights:
+                num_elements = var.shape.num_elements()
+                dtype_size = int(getattr(var.dtype, "size", 4))
+                if num_elements is not None:
+                    total += int(num_elements) * dtype_size
+            return int(total)
+        except Exception:
+            return 0
+
+    def _evict_until_capacity(self, incoming_size: int) -> None:
+        while self.model_cache_total_bytes + incoming_size > self.max_model_cache_bytes and self.models:
+            evicted_key, _ = self.models.popitem(last=False)
+            evicted_size = self.model_cache_bytes.pop(evicted_key, 0)
+            self.model_cache_total_bytes -= evicted_size
+            logger.info(
+                "Evicted model cache entry %s (~%.2f MB). Current cache size %.2f MB",
+                evicted_key,
+                evicted_size / (1024 * 1024),
+                self.model_cache_total_bytes / (1024 * 1024),
+            )
+
+    def _try_cache_model(self, key: tuple[str, str], model: Any) -> None:
+        size_bytes = self._estimate_model_size_bytes(model)
+        if size_bytes <= 0:
+            logger.warning("Model size could not be estimated for %s; model will not be cached", key)
+            return
+
+        if size_bytes > self.max_model_cache_bytes:
+            logger.warning(
+                "Model %s estimated at %.2f MB exceeds cache budget %.2f MB; model will not be cached",
+                key,
+                size_bytes / (1024 * 1024),
+                self.max_model_cache_bytes / (1024 * 1024),
+            )
+            return
+
+        self._evict_until_capacity(size_bytes)
+        self.models[key] = model
+        self.models.move_to_end(key)
+        self.model_cache_bytes[key] = size_bytes
+        self.model_cache_total_bytes += size_bytes
+        logger.info(
+            "Cached model %s (~%.2f MB). Current cache size %.2f MB",
+            key,
+            size_bytes / (1024 * 1024),
+            self.model_cache_total_bytes / (1024 * 1024),
+        )
 
     def load_metadata(self) -> None:
         self.available_models.clear()
@@ -124,12 +200,14 @@ class ModelRegistryService:
         key = self._get_cache_key(name, version, stage)
 
         if key in self.models:
+            self.models.move_to_end(key)
             logger.info("Cache hit for %s (%s)", name, key[1])
             return self.models[key]
 
         logger.info("Cache miss for %s (%s)", name, key[1])
         with self._load_lock:
             if key in self.models:
+                self.models.move_to_end(key)
                 logger.info("Cache hit for %s (%s)", name, key[1])
                 return self.models[key]
 
@@ -137,7 +215,7 @@ class ModelRegistryService:
                 raise UnknownModelError(f"Unknown model '{name}'")
 
             model = self._load_model(name, version, stage)
-            self.models[key] = model
+            self._try_cache_model(key, model)
             return model
 
     def get_threshold_value(self, model_name: str, threshold: float) -> float:
