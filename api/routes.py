@@ -10,7 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from api.enums import AnomalyColor, ArrayOutputFormat, ModelName, ModelStage
 from api.constants import MAX_ARRAY_BATCH_SIZE, MAX_IMAGE_BATCH_SIZE, MULTI_FILE_OPENAPI_SCHEMA
-from api.schemas import ArrayInput
+from api.schemas import ArrayInput, ArrayOutputResponse, ErrorDetail, ErrorResponse
 from src.inference.exceptions import ModelMetadataError, UnknownModelError
 from src.inference.serving import model_registry, run_inference
 
@@ -19,11 +19,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def error_detail(code: str, message: str, details: str | None = None) -> dict[str, str]:
-    payload = {"code": code, "message": message}
-    if details:
-        payload["details"] = details
-    return payload
+def error_detail(code: str, message: str, details: str | None = None) -> dict[str, str | None]:
+    return ErrorDetail(code=code, message=message, details=details).model_dump(exclude_none=True)
 
 
 def prepare_array_images(data: list[list[int]], img_size: tuple[int, int]) -> np.ndarray:
@@ -63,15 +60,19 @@ def flatten_output_array(output: np.ndarray) -> list[list[int]]:
 @router.post(
     "/predict_array/{model_name}",
     tags=["predict_array_input"],
+    response_model=ArrayOutputResponse,
     summary="Run anomaly inference on flattened array inputs",
     description=(
         "Accepts a batch of flattened BGR uint8-like arrays, reshapes each item to the model input size, "
         "runs anomaly inference, and returns either mask or redrawn outputs in flattened array form."
     ),
     responses={
-        400: {"description": "Invalid request payload, invalid selector combination, or batch-size limit exceeded"},
-        404: {"description": "Requested model is not available"},
-        503: {"description": "Model metadata unavailable for serving"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Invalid request payload, invalid selector combination, or batch-size limit exceeded",
+        },
+        404: {"model": ErrorResponse, "description": "Requested model is not available"},
+        503: {"model": ErrorResponse, "description": "Model metadata unavailable for serving"},
     },
 )
 async def predict_array_input(
@@ -179,10 +180,13 @@ async def predict_array_input(
         "runs anomaly inference, and returns a ZIP containing either masks or redrawn images."
     ),
     responses={
-        400: {"description": "Invalid request payload, image decode failure, invalid selector, or batch-size limit exceeded"},
-        404: {"description": "Requested model is not available"},
-        500: {"description": "Failed while encoding response images"},
-        503: {"description": "Model metadata unavailable for serving"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Invalid request payload, image decode failure, invalid selector, or batch-size limit exceeded",
+        },
+        404: {"model": ErrorResponse, "description": "Requested model is not available"},
+        500: {"model": ErrorResponse, "description": "Failed while encoding response images"},
+        503: {"model": ErrorResponse, "description": "Model metadata unavailable for serving"},
     },
 )
 async def predict_image_input(
