@@ -23,3 +23,18 @@ class AnomalyColor(str, Enum):
     blue = "blue"
     green = "green"
     red = "red"
+
+
+class ModelStage(str, Enum):
+    production = "Production"
+    staging = "Staging"
+    archived = "Archived"
+
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            for member in cls:
+                if member.value.lower() == normalized:
+                    return member
+        return None

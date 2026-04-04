@@ -6,3 +6,4 @@ aug_to: 2000
 filters: [32, 64, 96]
 latent_dim: 100
 threshold_percentile: 99
+seed: 26

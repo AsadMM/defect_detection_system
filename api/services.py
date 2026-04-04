@@ -74,10 +74,19 @@ class ModelRegistryService:
 
         logger.info("Loaded metadata for models: %s", sorted(self.available_models))
 
+    def _normalize_stage(self, stage: str) -> str:
+        stage_map = {
+            "production": "Production",
+            "staging": "Staging",
+            "archived": "Archived",
+        }
+        return stage_map.get(stage.strip().lower(), stage.strip())
+
     def _get_cache_key(self, name: str, version: int | None, stage: str) -> tuple[str, str]:
         if version is not None:
             return name, f"v{version}"
-        return name, stage
+        normalized_stage = self._normalize_stage(stage)
+        return name, normalized_stage
 
     def _load_local_model(self, name: str):
         logger.info("Loading %s from local artifacts", name)
@@ -92,10 +101,11 @@ class ModelRegistryService:
         return model
 
     def _load_model(self, name: str, version: int | None = None, stage: str = "Production"):
+        normalized_stage = self._normalize_stage(stage)
         if version is not None:
             model_uri = f"models:/{name}/{version}"
         else:
-            model_uri = f"models:/{name}/{stage}"
+            model_uri = f"models:/{name}/{normalized_stage}"
 
         if mlflow_keras is None:
             logger.warning("MLflow is unavailable for %s (%s), using local fallback", name, model_uri)

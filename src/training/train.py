@@ -8,6 +8,7 @@ Created on Tue May 21 15:52:39 2024
 # import the necessary packages
 import logging
 import os
+import random
 
 def configure_environment():
     os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
@@ -61,6 +62,8 @@ parser.add_argument('--latent_dim', type=int, default=100,
                     help='latent dimension for the code-space (bottleneck) of the autoencoder')
 parser.add_argument('--config', type=str, default=None,
                     help='path to a YAML config file with training parameters')
+parser.add_argument('--seed', type=int, default=26,
+                    help='global random seed for reproducible training and augmentation')
 
 
 def load_yaml_config(config_path: str) -> dict:
@@ -179,105 +182,133 @@ if __name__ == '__main__':
     THRESH_PERCENTILE = args.threshold_percentile
     FILTERS = args.filters
     LATENT_DIM = args.latent_dim
+    SEED = args.seed
     logger.info("Model config filters=%s latent_dim=%s", FILTERS, LATENT_DIM)
+
+    random.seed(SEED)
+    np.random.seed(SEED)
+    tf.random.set_seed(SEED)
+    logger.info("Using global random seed=%d", SEED)
     mlflow.set_tracking_uri("sqlite:///artifacts/mlflow/mlflow.db")
     mlflow.set_experiment("autoencoder_anomaly_detection")
-    mlflow.start_run()
-    mlflow.log_param('dataset_name', f'mvtec/{NAME}')
-    mlflow.log_param('epochs', EPOCHS)
-    mlflow.log_param('batch_size', BS)
-    mlflow.log_param('filters', FILTERS)
-    mlflow.log_param('latent_dim', LATENT_DIM)
-    mlflow.log_param('img_size', IMG_SIZE)
 
-    logger.info("Reading files for %s", NAME)
-    train_files = get_filenames(NAME, 'train')
-    imgs = read_images(train_files, IMG_SIZE)
-    logger.info("Images read: %s", imgs.shape)
-    augmented_images = augment_images(imgs, AUG_TO, ROTATE_LIMIT, CROP_LIMIT, IMG_SIZE)
-    logger.info("Augmented images created: %s", augmented_images.shape)
-    training_imgs = np.vstack((imgs, augmented_images))
-    logger.info("Total training images: %s", training_imgs.shape)
+    try:
+        with mlflow.start_run(run_name=f"train-{NAME}"):
+            mlflow.log_param('dataset_name', f'mvtec/{NAME}')
+            mlflow.log_param('epochs', EPOCHS)
+            mlflow.log_param('batch_size', BS)
+            mlflow.log_param('filters', FILTERS)
+            mlflow.log_param('latent_dim', LATENT_DIM)
+            mlflow.log_param('img_size', IMG_SIZE)
+            mlflow.log_param('aug_to', AUG_TO)
+            mlflow.log_param('threshold_percentile', THRESH_PERCENTILE)
+            mlflow.log_param('rotate_limit', ROTATE_LIMIT)
+            mlflow.log_param('crop_limit', CROP_LIMIT)
+            mlflow.log_param('seed', SEED)
 
-    # Freeing up memory
-    del imgs
-    del augmented_images
+            logger.info("Reading files for %s", NAME)
+            train_files = get_filenames(NAME, 'train')
+            imgs = read_images(train_files, IMG_SIZE)
+            logger.info("Images read: %s", imgs.shape)
+            augmented_images = augment_images(imgs, AUG_TO, ROTATE_LIMIT, CROP_LIMIT, IMG_SIZE)
+            logger.info("Augmented images created: %s", augmented_images.shape)
+            training_imgs = np.vstack((imgs, augmented_images))
+            logger.info("Total training images: %s", training_imgs.shape)
 
-    # construct our convolutional autoencoder
-    logger.info("Building autoencoder...")
-    autoencoder = build1(IMG_SIZE, IMG_SIZE, IMG_DEPTH, FILTERS, LATENT_DIM)
-    autoencoder.summary()
+            # Freeing up memory
+            del imgs
+            del augmented_images
 
-    # train the convolutional autoencoder
-    mlflowMetricsLogger = MLflowMetricsLogger()
-    train_config = {
-        'name': NAME,
-        'epochs': EPOCHS,
-        'batch_size': BS,
-        'test_size': 0.2,
-        'random_state': 26,
-        'callbacks': [mlflowMetricsLogger],
-    }
-    autoencoder, H, validation_data = train_autoencoder(autoencoder, training_imgs, train_config)
-    # Freeing up memory
-    del training_imgs
-    # Estimate the threshold based on the validation set
-    valid_predicted_imgs = autoencoder.predict(validation_data)
-    thresholds_map = get_threshold(validation_data, valid_predicted_imgs)
-    threshold = thresholds_map[THRESH_PERCENTILE]
-    logger.info("Estimated threshold: %s", threshold)
+            # construct our convolutional autoencoder
+            logger.info("Building autoencoder...")
+            autoencoder = build1(IMG_SIZE, IMG_SIZE, IMG_DEPTH, FILTERS, LATENT_DIM)
+            autoencoder.summary()
 
-    # IGNORE THIS
-    '''threshold = 0.07769
-    autoencoder.load_weights(os.path.join('artifacts', 'models', 'model_hazelnut.h5'))
-    autoencoder.summary()'''
+            # train the convolutional autoencoder
+            mlflowMetricsLogger = MLflowMetricsLogger()
+            train_config = {
+                'name': NAME,
+                'epochs': EPOCHS,
+                'batch_size': BS,
+                'test_size': 0.2,
+                'random_state': SEED,
+                'callbacks': [mlflowMetricsLogger],
+            }
+            autoencoder, _history, validation_data = train_autoencoder(autoencoder, training_imgs, train_config)
+            # Freeing up memory
+            del training_imgs
+            # Estimate the threshold based on the validation set
+            valid_predicted_imgs = autoencoder.predict(validation_data)
+            thresholds_map = get_threshold(validation_data, valid_predicted_imgs)
+            threshold = thresholds_map[THRESH_PERCENTILE]
+            mlflow.log_metric("selected_threshold", float(threshold))
+            logger.info("Estimated threshold: %s", threshold)
 
-    # Read test images and run through the model and finally get the masked images
-    test_files = get_filenames(NAME, 'test')
-    test_imgs = read_images(test_files, IMG_SIZE)
-    defects = read_defect(test_files)
-    test_predicted_imgs = autoencoder.predict(test_imgs)
-    masked_results = get_results(test_imgs, test_predicted_imgs, threshold)
-    test_results = [(np.sum(res), defect) for res, defect in zip(masked_results, defects)]
-    logger.info("Listed test results: %s", test_results)
+            # IGNORE THIS
+            '''threshold = 0.07769
+            autoencoder.load_weights(os.path.join('artifacts', 'models', 'model_hazelnut.h5'))
+            autoencoder.summary()'''
 
-    # Group the results
-    test_results_grouped = group_test_results(test_results)
-    logger.info("Grouped test results: %s", test_results_grouped)
-    logger.info("Saving images...")
-    if not os.path.exists(os.path.join('artifacts', 'comparison_images', NAME)):
-        os.makedirs(os.path.join('artifacts', 'comparison_images', NAME))
-    redrawn_imgs, original_imgs = get_drawn_results(test_imgs, masked_results)
-    for redrawn, original, defect, i in zip(redrawn_imgs, original_imgs, defects,
-                                            range(len(original_imgs))):
-        cv2.imwrite(os.path.join('artifacts', 'comparison_images', NAME, f'redrawn_{i}.png'),
-                    redrawn)
-        cv2.imwrite(os.path.join('artifacts', 'comparison_images', NAME, f'original_{defect}_{i}.png'),
-                    original)
+            # Read test images and run through the model and finally get the masked images
+            test_files = get_filenames(NAME, 'test')
+            test_imgs = read_images(test_files, IMG_SIZE)
+            defects = read_defect(test_files)
+            test_predicted_imgs = autoencoder.predict(test_imgs)
+            masked_results = get_results(test_imgs, test_predicted_imgs, threshold)
+            test_results = [(np.sum(res), defect) for res, defect in zip(masked_results, defects)]
+            logger.info("Listed test results: %s", test_results)
 
-    logger.info("Saving model, threshold map and other variables...")
-    os.makedirs(os.path.join('artifacts', 'models'), exist_ok=True)
-    os.makedirs(os.path.join('artifacts', 'thresholds'), exist_ok=True)
-    os.makedirs(os.path.join('artifacts', 'sizes'), exist_ok=True)
-    
-    autoencoder.save(os.path.join('artifacts', 'models', 'model_' + NAME + '.h5'))
-    register_model_in_registry(autoencoder, NAME)
-    # Open a file and use dump() 
-    with open(os.path.join('artifacts', 'thresholds', 'thresholds_' + NAME + '.pkl'), 'wb') as file:
-        # Save the thresholds value in a file
-        pickle.dump(thresholds_map, file)
+            # Group the results
+            test_results_grouped = group_test_results(test_results)
+            logger.info("Grouped test results: %s", test_results_grouped)
+            logger.info("Saving images...")
+            if not os.path.exists(os.path.join('artifacts', 'comparison_images', NAME)):
+                os.makedirs(os.path.join('artifacts', 'comparison_images', NAME))
+            redrawn_imgs, original_imgs = get_drawn_results(test_imgs, masked_results)
+            for redrawn, original, defect, i in zip(redrawn_imgs, original_imgs, defects,
+                                                    range(len(original_imgs))):
+                cv2.imwrite(os.path.join('artifacts', 'comparison_images', NAME, f'redrawn_{i}.png'),
+                            redrawn)
+                cv2.imwrite(os.path.join('artifacts', 'comparison_images', NAME, f'original_{defect}_{i}.png'),
+                            original)
 
-    with open(os.path.join('artifacts', 'sizes', 'sizes_' + NAME + '.pkl'), 'wb') as file:
-        # Save the sizes value in a file
-        pickle.dump([IMG_SIZE, IMG_DEPTH], file)
+            logger.info("Saving model, threshold map and other variables...")
+            os.makedirs(os.path.join('artifacts', 'models'), exist_ok=True)
+            os.makedirs(os.path.join('artifacts', 'thresholds'), exist_ok=True)
+            os.makedirs(os.path.join('artifacts', 'sizes'), exist_ok=True)
 
-    # Ignore this
-    '''with open('residual_' + 'hazelnut' + '.pkl', 'rb') as file:
-        res_maps = pickle.load(file)
-        logger.info("Residual maps: %s", res_maps)
-    percentiles = np.arange(90, 100, 0.1)
-    thresholds = np.percentile(res_maps, percentiles)
-    thresholds_dict = {round(percentile,1): threshold for percentile, threshold in zip(percentiles, thresholds)}'''
+            model_path = os.path.join('artifacts', 'models', 'model_' + NAME + '.h5')
+            threshold_path = os.path.join('artifacts', 'thresholds', 'thresholds_' + NAME + '.pkl')
+            size_path = os.path.join('artifacts', 'sizes', 'sizes_' + NAME + '.pkl')
 
-    mlflow.end_run()
+            autoencoder.save(model_path)
+            # Open a file and use dump()
+            with open(threshold_path, 'wb') as file:
+                # Save the thresholds value in a file
+                pickle.dump(thresholds_map, file)
+
+            with open(size_path, 'wb') as file:
+                # Save the sizes value in a file
+                pickle.dump([IMG_SIZE, IMG_DEPTH], file)
+
+            mlflow.log_artifact(model_path, artifact_path="local_artifacts")
+            mlflow.log_artifact(threshold_path, artifact_path="local_artifacts")
+            mlflow.log_artifact(size_path, artifact_path="local_artifacts")
+
+            register_model_in_registry(autoencoder, NAME)
+
+            # Ignore this
+            '''with open('residual_' + 'hazelnut' + '.pkl', 'rb') as file:
+                res_maps = pickle.load(file)
+                logger.info("Residual maps: %s", res_maps)
+            percentiles = np.arange(90, 100, 0.1)
+            thresholds = np.percentile(res_maps, percentiles)
+            thresholds_dict = {round(percentile,1): threshold for percentile, threshold in zip(percentiles, thresholds)}'''
+    except Exception:
+        active_run = mlflow.active_run()
+        if active_run is not None:
+            mlflow.set_tag("training_status", "failed")
+        logger.exception("Training pipeline failed for model=%s", NAME)
+        raise
+
     logger.info("Exiting...")
