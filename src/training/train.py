@@ -122,6 +122,41 @@ class MLflowMetricsLogger(Callback):
             mlflow.log_metric('validation_loss', float(logs['val_loss']), step=epoch)
 
 
+def register_model_in_registry(model, model_name: str) -> None:
+    """
+    Log the trained Keras model and register it in MLflow Model Registry
+    under the object-class name (e.g., bottle, screw).
+    """
+    artifact_path = "model"
+    run = mlflow.active_run()
+    if run is None:
+        raise RuntimeError("No active MLflow run found while registering model.")
+
+    run_id = run.info.run_id
+
+    try:
+        # Preferred path for MLflow versions that support direct registration during log_model.
+        mlflow.keras.log_model(
+            model,
+            artifact_path=artifact_path,
+            registered_model_name=model_name,
+        )
+        logger.info("Registered model '%s' in MLflow Model Registry", model_name)
+        return
+    except TypeError:
+        # Fallback for older/newer APIs where this signature may differ.
+        logger.info("Direct model registration during log_model unsupported; using register_model fallback")
+
+    mlflow.keras.log_model(model, artifact_path=artifact_path)
+    model_uri = f"runs:/{run_id}/{artifact_path}"
+    registered = mlflow.register_model(model_uri=model_uri, name=model_name)
+    logger.info(
+        "Registered model '%s' in MLflow Model Registry as version %s",
+        model_name,
+        registered.version,
+    )
+
+
 
 if __name__ == '__main__':
     setup_logging()
@@ -226,7 +261,7 @@ if __name__ == '__main__':
     os.makedirs(os.path.join('artifacts', 'sizes'), exist_ok=True)
     
     autoencoder.save(os.path.join('artifacts', 'models', 'model_' + NAME + '.h5'))
-    mlflow.keras.log_model(autoencoder, artifact_path='model')
+    register_model_in_registry(autoencoder, NAME)
     # Open a file and use dump() 
     with open(os.path.join('artifacts', 'thresholds', 'thresholds_' + NAME + '.pkl'), 'wb') as file:
         # Save the thresholds value in a file

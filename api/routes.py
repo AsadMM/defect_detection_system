@@ -25,9 +25,14 @@ async def predict_array_input(
     request: ArrayInput,
     model_name: Annotated[ModelName, Path(title="The model for the input object class")],
     threshold: Annotated[float, Query(ge=90.0, lt=100)] = 99.0,
+    version: Annotated[int | None, Query(description="Model version")] = None,
+    stage: Annotated[str, Query(description="Model stage")] = "Production",
     output_format: ArrayOutputFormat = ArrayOutputFormat.mask,
     redraw_color: AnomalyColor = AnomalyColor.blue,
 ):
+    if version is not None and stage != "Production":
+        raise HTTPException(status_code=400, detail="Provide either version or stage, not both")
+
     logger.info("Received request for model=%s", model_name.value)
     img_size, threshold_value, color = get_model_context(model_name.value, threshold, redraw_color.value)
     flat_size = img_size[0] * img_size[0] * img_size[1]
@@ -54,6 +59,8 @@ async def predict_array_input(
         threshold_value,
         output_format.value,
         color,
+        version=version,
+        stage=stage,
     )
 
     return {"output": [np.ravel(out).tolist() for out in output]}
@@ -68,9 +75,14 @@ async def predict_image_input(
     model_name: Annotated[ModelName, Path(title="The model for the input object class")],
     files: list[UploadFile] = File(...),
     threshold: Annotated[float, Query(ge=90.0, lt=100)] = 99.0,
+    version: Annotated[int | None, Query(description="Model version")] = None,
+    stage: Annotated[str, Query(description="Model stage")] = "Production",
     output_format: ArrayOutputFormat = ArrayOutputFormat.mask,
     redraw_color: AnomalyColor = AnomalyColor.blue,
 ):
+    if version is not None and stage != "Production":
+        raise HTTPException(status_code=400, detail="Provide either version or stage, not both")
+
     logger.info("Received request for model=%s", model_name.value)
     images = []
     filenames = []
@@ -97,6 +109,8 @@ async def predict_image_input(
         threshold_value,
         output_format.value,
         color,
+        version=version,
+        stage=stage,
     )
     if output_format.value == "mask":
         zip_filename = "masked_images.zip"

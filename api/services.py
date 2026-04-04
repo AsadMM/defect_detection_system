@@ -6,14 +6,29 @@ import time
 from typing import Any
 
 import numpy as np
+try:
+    import mlflow
+except Exception:  # pragma: no cover - optional dependency at runtime
+    mlflow = None
+
+try:
+    import mlflow.keras as mlflow_keras
+except Exception:  # pragma: no cover - optional dependency at runtime
+    mlflow_keras = None
+
 from src.models.autoencoder import build1
 from src.models.threshold import get_results
 from src.utils.visualization import convert_int, get_drawn_results
 
 
 logger = logging.getLogger(__name__)
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///artifacts/mlflow/mlflow.db")
+if mlflow is not None:
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    logger.info("MLflow tracking URI set to %s", MLFLOW_TRACKING_URI)
+
 colors = {"blue": (255, 0, 0), "green": (0, 255, 0), "red": (0, 0, 255)}
-models: dict[str, Any] = {}
+models: dict[tuple[str, str], Any] = {}
 sizes: dict[str, tuple[int, int]] = {}
 threshold_maps: dict[str, dict[float, float]] = {}
 AVAILABLE_MODEL_NAMES: set[str] = set()
@@ -58,36 +73,72 @@ def load_metadata() -> None:
     logger.info("Loaded metadata for models: %s", sorted(AVAILABLE_MODEL_NAMES))
 
 
-def load_model(name: str) -> None:
-    logger.info("Loading model %s into memory", name)
+def _build_cache_key(name: str, version: int | None = None, stage: str = "Production") -> tuple[str, str]:
+    if version is not None:
+        return name, f"v{version}"
+    return name, stage
 
+
+def load_local_model(name: str):
+    logger.info("Loading model %s from local artifacts", name)
     size = sizes[name]
     model_path = f"artifacts/models/model_{name}.h5"
 
     autoencoder = build1(size[0], size[0], size[1])
     autoencoder.load_weights(model_path)
 
-    models[name] = autoencoder
+    logger.info("Model %s loaded from local file", name)
+    return autoencoder
 
-    logger.info("Model %s loaded successfully", name)
+
+def load_model(name: str, version: int | None = None, stage: str = "Production") -> None:
+    cache_key = _build_cache_key(name, version, stage)
+    if version is not None:
+        model_uri = f"models:/{name}/{version}"
+    else:
+        model_uri = f"models:/{name}/{stage}"
+
+    if mlflow_keras is None:
+        logger.warning(
+            "MLflow is not available, using local fallback for model %s (%s)",
+            name,
+            cache_key[1],
+        )
+        models[cache_key] = load_local_model(name)
+        return
+
+    try:
+        logger.info("Loading model %s from MLflow (%s)", name, model_uri)
+        model = mlflow_keras.load_model(model_uri)
+        models[cache_key] = model
+        logger.info("Model %s loaded from MLflow (%s)", name, model_uri)
+    except Exception as exc:
+        logger.warning(
+            "MLflow load failed for model %s (%s), falling back. Error: %s",
+            name,
+            model_uri,
+            str(exc),
+        )
+        models[cache_key] = load_local_model(name)
 
 
-def get_model(name: str):
-    if name in models:
-        logger.info("Cache hit for model %s", name)
-        return models[name]
+def get_model(name: str, version: int | None = None, stage: str = "Production"):
+    cache_key = _build_cache_key(name, version, stage)
+    if cache_key in models:
+        logger.info("Cache hit for model %s (%s)", name, cache_key[1])
+        return models[cache_key]
 
-    logger.info("Cache miss for model %s", name)
+    logger.info("Cache miss for model %s (%s)", name, cache_key[1])
     with _model_load_lock:
-        if name in models:
-            logger.info("Cache hit for model %s", name)
-            return models[name]
+        if cache_key in models:
+            logger.info("Cache hit for model %s (%s)", name, cache_key[1])
+            return models[cache_key]
 
         if name not in AVAILABLE_MODEL_NAMES:
             raise KeyError(f"Unknown model '{name}'")
 
-        load_model(name)
-        return models[name]
+        load_model(name, version=version, stage=stage)
+        return models[cache_key]
 
 
 def predict_images(images, model_name: str):
@@ -111,10 +162,12 @@ def run_inference(
     threshold_value: float,
     output_format: str,
     color: tuple,
+    version: int | None = None,
+    stage: str = "Production",
 ):
-    logger.info("Running inference for model=%s", model_name)
+    logger.info("Running inference for model=%s version=%s stage=%s", model_name, version, stage)
     start = time.time()
-    model = get_model(model_name)
+    model = get_model(model_name, version=version, stage=stage)
     predicted_images = model.predict(images)
     masked_images = get_results(images, predicted_images, threshold_value)
     if output_format == "mask":
@@ -134,6 +187,7 @@ __all__ = [
     "get_model_context",
     "get_threshold_value",
     "load_metadata",
+    "load_local_model",
     "load_model",
     "models",
     "predict_images",
