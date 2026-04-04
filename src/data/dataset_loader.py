@@ -71,6 +71,8 @@ def read_images(filepaths: list[str], size: int) -> np.ndarray:
     images = []
     for file in filepaths:
         img = cv2.imread(file)
+        if img is None:
+            raise ValueError(f"Failed to read image file: {file}")
         if img.shape[:2] != (size, size):
             img = cv2.resize(img, (size, size))
         images.append(img)

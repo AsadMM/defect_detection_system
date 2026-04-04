@@ -8,6 +8,7 @@ import numpy as np
 from fastapi import APIRouter, File, HTTPException, Path, Query, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
+from api.exceptions import ModelMetadataError, UnknownModelError
 from api.enums import AnomalyColor, ArrayOutputFormat, ModelName, ModelStage
 from api.constants import MUTLI_FILE_OPENAPI_SCHEMA
 from api.schemas import ArrayInput
@@ -23,8 +24,10 @@ logger = logging.getLogger(__name__)
 
 def prepare_array_images(data: list[list[int]], img_size: tuple[int, int]) -> np.ndarray:
     images = np.array([np.reshape(d, (img_size[0], img_size[0], img_size[1])) for d in data])
-    if np.max(images) > 255:
-        raise ValueError("Invalid input data size of int. (MAX IS 255)")
+    if np.issubdtype(images.dtype, np.number) is False:
+        raise ValueError("Invalid input data type. Expected numeric pixel values.")
+    if np.min(images) < 0 or np.max(images) > 255:
+        raise ValueError("Invalid input data range. Pixel values must be in [0, 255].")
     return images.astype("uint8") / 255.0
 
 
@@ -63,11 +66,16 @@ async def predict_array_input(
         raise HTTPException(status_code=400, detail="Provide either version or stage, not both")
 
     logger.info("Received request for model=%s", model_name.value)
-    img_size, threshold_value, color = model_registry.get_model_context(
-        model_name.value,
-        threshold,
-        redraw_color.value,
-    )
+    try:
+        img_size, threshold_value, color = model_registry.get_model_context(
+            model_name.value,
+            threshold,
+            redraw_color.value,
+        )
+    except UnknownModelError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ModelMetadataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     flat_size = img_size[0] * img_size[0] * img_size[1]
     logger.info("Batch size: %d", len(request.data))
 
@@ -86,7 +94,12 @@ async def predict_array_input(
         logger.error("Failed request for model=%s", model_name.value)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    model = await run_in_threadpool(model_registry.get_model, model_name.value, version, stage.value)
+    try:
+        model = await run_in_threadpool(model_registry.get_model, model_name.value, version, stage.value)
+    except UnknownModelError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ModelMetadataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     output = await run_in_threadpool(
         run_inference,
         images,
@@ -122,11 +135,16 @@ async def predict_image_input(
     filenames = []
     logger.info("Batch size: %d", len(files))
 
-    img_size, threshold_value, color = model_registry.get_model_context(
-        model_name.value,
-        threshold,
-        redraw_color.value,
-    )
+    try:
+        img_size, threshold_value, color = model_registry.get_model_context(
+            model_name.value,
+            threshold,
+            redraw_color.value,
+        )
+    except UnknownModelError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ModelMetadataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     for file in files:
         contents = await file.read()
@@ -140,7 +158,12 @@ async def predict_image_input(
         filenames.append(file.filename)
 
     images = (np.array(images) / 255.0).astype("float32")
-    model = await run_in_threadpool(model_registry.get_model, model_name.value, version, stage.value)
+    try:
+        model = await run_in_threadpool(model_registry.get_model, model_name.value, version, stage.value)
+    except UnknownModelError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ModelMetadataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     output = await run_in_threadpool(
         run_inference,
         images,

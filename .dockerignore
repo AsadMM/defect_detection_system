@@ -1,0 +1,17 @@
+.git
+.gitignore
+__pycache__/
+*/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+logs/
+mlruns/
+
+data/
+
+archive.zip
+redrawn_images.zip
+
+.DS_Store

@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from api.exceptions import ModelMetadataError, UnknownModelError
+
 try:
     import mlflow
 except Exception:  # pragma: no cover - optional dependency at runtime
@@ -132,19 +134,31 @@ class ModelRegistryService:
                 return self.models[key]
 
             if name not in self.available_models:
-                raise KeyError(f"Unknown model '{name}'")
+                raise UnknownModelError(f"Unknown model '{name}'")
 
             model = self._load_model(name, version, stage)
             self.models[key] = model
             return model
 
     def get_threshold_value(self, model_name: str, threshold: float) -> float:
-        return self.threshold_maps[model_name][round(threshold, 1)]
+        rounded_threshold = round(threshold, 1)
+        model_thresholds = self.threshold_maps.get(model_name)
+        if model_thresholds is None:
+            raise ModelMetadataError(f"Threshold metadata missing for model '{model_name}'")
+        if rounded_threshold not in model_thresholds:
+            raise ModelMetadataError(
+                f"Threshold metadata missing percentile {rounded_threshold} for model '{model_name}'"
+            )
+        return model_thresholds[rounded_threshold]
 
     def get_model_context(self, model_name: str, threshold: float, redraw_color: str):
         colors = {"blue": (255, 0, 0), "green": (0, 255, 0), "red": (0, 0, 255)}
-        img_size = self.sizes[model_name]
+        img_size = self.sizes.get(model_name)
+        if img_size is None:
+            raise ModelMetadataError(f"Size metadata missing for model '{model_name}'")
         threshold_value = self.get_threshold_value(model_name, threshold)
+        if redraw_color not in colors:
+            raise ModelMetadataError(f"Unsupported redraw color '{redraw_color}'")
         color = colors[redraw_color]
         return img_size, threshold_value, color
 
