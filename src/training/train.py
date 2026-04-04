@@ -6,6 +6,7 @@ Created on Tue May 21 15:52:39 2024
 """
 
 # import the necessary packages
+import logging
 import os
 
 def configure_environment():
@@ -29,6 +30,11 @@ import numpy as np
 import pickle
 import cv2
 import argparse
+
+from src.utils.logging import setup_logging
+
+
+logger = logging.getLogger(__name__)
 
 # Configure TensorFlow to allocate GPU memory on demand instead of pre-allocating all memory.
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -118,6 +124,8 @@ class MLflowMetricsLogger(Callback):
 
 
 if __name__ == '__main__':
+    setup_logging()
+
     # parse the given command-line arguments
     # if not arguments just use the default values
     args = parser.parse_args()
@@ -136,7 +144,7 @@ if __name__ == '__main__':
     THRESH_PERCENTILE = args.threshold_percentile
     FILTERS = args.filters
     LATENT_DIM = args.latent_dim
-    print(FILTERS, LATENT_DIM)
+    logger.info("Model config filters=%s latent_dim=%s", FILTERS, LATENT_DIM)
     mlflow.set_tracking_uri("sqlite:///artifacts/mlflow/mlflow.db")
     mlflow.set_experiment("autoencoder_anomaly_detection")
     mlflow.start_run()
@@ -147,21 +155,21 @@ if __name__ == '__main__':
     mlflow.log_param('latent_dim', LATENT_DIM)
     mlflow.log_param('img_size', IMG_SIZE)
 
-    print('Reading files for ' + NAME)
+    logger.info("Reading files for %s", NAME)
     train_files = get_filenames(NAME, 'train')
     imgs = read_images(train_files, IMG_SIZE)
-    print('Images read:', imgs.shape)
+    logger.info("Images read: %s", imgs.shape)
     augmented_images = augment_images(imgs, AUG_TO, ROTATE_LIMIT, CROP_LIMIT, IMG_SIZE)
-    print('Augmented images created:', augmented_images.shape)
+    logger.info("Augmented images created: %s", augmented_images.shape)
     training_imgs = np.vstack((imgs, augmented_images))
-    print('Total training images:', training_imgs.shape)
+    logger.info("Total training images: %s", training_imgs.shape)
 
     # Freeing up memory
     del imgs
     del augmented_images
 
     # construct our convolutional autoencoder
-    print("building autoencoder...")
+    logger.info("Building autoencoder...")
     autoencoder = build1(IMG_SIZE, IMG_SIZE, IMG_DEPTH, FILTERS, LATENT_DIM)
     autoencoder.summary()
 
@@ -182,7 +190,7 @@ if __name__ == '__main__':
     valid_predicted_imgs = autoencoder.predict(validation_data)
     thresholds_map = get_threshold(validation_data, valid_predicted_imgs)
     threshold = thresholds_map[THRESH_PERCENTILE]
-    print('Estimated threshold:', threshold)
+    logger.info("Estimated threshold: %s", threshold)
 
     # IGNORE THIS
     '''threshold = 0.07769
@@ -196,12 +204,12 @@ if __name__ == '__main__':
     test_predicted_imgs = autoencoder.predict(test_imgs)
     masked_results = get_results(test_imgs, test_predicted_imgs, threshold)
     test_results = [(np.sum(res), defect) for res, defect in zip(masked_results, defects)]
-    print('Listed test results:', test_results)
+    logger.info("Listed test results: %s", test_results)
 
     # Group the results
     test_results_grouped = group_test_results(test_results)
-    print('Grouped test results:', test_results_grouped)
-    print('Saving images...')
+    logger.info("Grouped test results: %s", test_results_grouped)
+    logger.info("Saving images...")
     if not os.path.exists(os.path.join('artifacts', 'comparison_images', NAME)):
         os.makedirs(os.path.join('artifacts', 'comparison_images', NAME))
     redrawn_imgs, original_imgs = get_drawn_results(test_imgs, masked_results)
@@ -212,7 +220,7 @@ if __name__ == '__main__':
         cv2.imwrite(os.path.join('artifacts', 'comparison_images', NAME, f'original_{defect}_{i}.png'),
                     original)
 
-    print('Saving model, threshold map and other variables...')
+    logger.info("Saving model, threshold map and other variables...")
     os.makedirs(os.path.join('artifacts', 'models'), exist_ok=True)
     os.makedirs(os.path.join('artifacts', 'thresholds'), exist_ok=True)
     os.makedirs(os.path.join('artifacts', 'sizes'), exist_ok=True)
@@ -231,10 +239,10 @@ if __name__ == '__main__':
     # Ignore this
     '''with open('residual_' + 'hazelnut' + '.pkl', 'rb') as file:
         res_maps = pickle.load(file)
-        print(res_maps)
+        logger.info("Residual maps: %s", res_maps)
     percentiles = np.arange(90, 100, 0.1)
     thresholds = np.percentile(res_maps, percentiles)
     thresholds_dict = {round(percentile,1): threshold for percentile, threshold in zip(percentiles, thresholds)}'''
 
     mlflow.end_run()
-    print('Exiting...')
+    logger.info("Exiting...")

@@ -6,6 +6,8 @@ Created on Tue May 21 14:48:54 2024
 """
 
 # import the necessary packages
+import logging
+
 from tensorflow.keras.layers import BatchNormalization
 from tensorflow.keras.layers import Conv2D
 from tensorflow.keras.layers import Conv2DTranspose
@@ -18,6 +20,9 @@ from tensorflow.keras.layers import Input
 from tensorflow.keras.models import Model
 from tensorflow.keras import backend as K
 import numpy as np
+
+
+logger = logging.getLogger(__name__)
 
 
 def build1(width: int, height: int, depth: int, filters: tuple | list = (32, 64, 96), latentDim: int = 100) -> Model:
@@ -60,7 +65,7 @@ def build1(width: int, height: int, depth: int, filters: tuple | list = (32, 64,
         x = BatchNormalization(axis=chanDim)(x)
     # flatten the network and then construct our latent vector
     volumeSize = K.int_shape(x)
-    print(volumeSize)
+    logger.info("Encoder volume size: %s", volumeSize)
     x = Flatten()(x)
     latent = Dense(latentDim)(x)
     # build the encoder model

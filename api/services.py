@@ -1,5 +1,7 @@
+import logging
 import os
 import pickle
+import time
 from glob import glob
 from typing import Any
 
@@ -9,6 +11,7 @@ from src.utils.visualization import convert_int, get_drawn_results
 from src.models.threshold import get_results
 
 
+logger = logging.getLogger(__name__)
 colors = {"blue": (255, 0, 0), "green": (0, 255, 0), "red": (0, 0, 255)}
 models: dict[str, Any] = {}
 sizes: dict[str, tuple[int, int]] = {}
@@ -45,8 +48,10 @@ def load_artifacts() -> set[str]:
             missing.append("threshold")
 
         if missing:
-            print(f"Skipping artifact '{name}': missing {', '.join(missing)} file(s)")
+            logger.warning("Skipping artifact '%s': missing %s file(s)", name, ", ".join(missing))
             continue
+
+        logger.info("Loading model %s", name)
 
         with open(size_map[name], "rb") as file:
             size = pickle.load(file)
@@ -60,9 +65,15 @@ def load_artifacts() -> set[str]:
         autoencoder.load_weights(model_map[name])
         models[name] = autoencoder
         names.add(name)
-        print("Loading:", name)
-        print("Paths:", model_map[name], size_map[name], threshold_map[name])
-        print("Model size:", size)
+        logger.info("Model %s loaded successfully", name)
+        logger.info(
+            "Model %s artifacts paths: model=%s size=%s threshold=%s",
+            name,
+            model_map[name],
+            size_map[name],
+            threshold_map[name],
+        )
+        logger.info("Model %s input size: %s", name, size)
 
     return names
 
@@ -85,15 +96,21 @@ def get_model_context(model_name: str, threshold: float, redraw_color: str):
 def run_inference(
     images: np.ndarray,
     model,
+    model_name: str,
     threshold_value: float,
     output_format: str,
     color: tuple,
 ):
+    logger.info("Running inference for model=%s", model_name)
+    start = time.time()
     predicted_images = model.predict(images)
     masked_images = get_results(images, predicted_images, threshold_value)
     if output_format == "mask":
-        return convert_int(masked_images)
+        output = convert_int(masked_images)
+        logger.info("Inference completed in %.3f sec", time.time() - start)
+        return output
     output, _ = get_drawn_results(images, masked_images, color)
+    logger.info("Inference completed in %.3f sec", time.time() - start)
     return output
 
 

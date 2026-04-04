@@ -1,6 +1,18 @@
+import logging
+import time
+import uuid
+
 from fastapi import FastAPI
+from fastapi import Request
+
+from src.utils.logging import setup_logging
+
+setup_logging()
 
 from api.routes import router
+
+
+logger = logging.getLogger(__name__)
 
 
 tags_metadata = [
@@ -35,5 +47,39 @@ app = FastAPI(
     version="0.0.1",
     openapi_tags=tags_metadata,
 )
+
+
+@app.middleware("http")
+async def log_request_latency(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+    except Exception:
+        duration = time.time() - start_time
+        logger.exception(
+            "req_id=%s | %s %s | ERROR | time=%.3fs",
+            request_id,
+            request.method,
+            request.url.path,
+            duration,
+        )
+        raise
+
+    duration = time.time() - start_time
+    logger.info(
+        "req_id=%s | %s %s | status=%d | time=%.3fs",
+        request_id,
+        request.method,
+        request.url.path,
+        status_code,
+        duration,
+    )
+
+    response.headers["X-Request-ID"] = request_id
+    return response
+
 
 app.include_router(router)
