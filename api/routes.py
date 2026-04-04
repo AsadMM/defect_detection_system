@@ -11,7 +11,7 @@ from api.enums import AnomalyColor, ArrayOutputFormat, ModelName
 from api.constants import MUTLI_FILE_OPENAPI_SCHEMA
 from api.schemas import ArrayInput
 from api.services import (
-    get_model_context,
+    model_registry,
     run_inference,
 )
 
@@ -34,7 +34,11 @@ async def predict_array_input(
         raise HTTPException(status_code=400, detail="Provide either version or stage, not both")
 
     logger.info("Received request for model=%s", model_name.value)
-    img_size, threshold_value, color = get_model_context(model_name.value, threshold, redraw_color.value)
+    img_size, threshold_value, color = model_registry.get_model_context(
+        model_name.value,
+        threshold,
+        redraw_color.value,
+    )
     flat_size = img_size[0] * img_size[0] * img_size[1]
     logger.info("Batch size: %d", len(request.data))
 
@@ -53,14 +57,14 @@ async def predict_array_input(
         raise HTTPException(status_code=400, detail="Invalid input data size of int. (MAX IS 255)")
 
     images = images.astype("uint8") / 255.0
+    model = model_registry.get_model(model_name.value, version=version, stage=stage)
     output = run_inference(
         images,
+        model,
         model_name.value,
         threshold_value,
         output_format.value,
         color,
-        version=version,
-        stage=stage,
     )
 
     return {"output": [np.ravel(out).tolist() for out in output]}
@@ -88,7 +92,11 @@ async def predict_image_input(
     filenames = []
     logger.info("Batch size: %d", len(files))
 
-    img_size, threshold_value, color = get_model_context(model_name.value, threshold, redraw_color.value)
+    img_size, threshold_value, color = model_registry.get_model_context(
+        model_name.value,
+        threshold,
+        redraw_color.value,
+    )
 
     for file in files:
         contents = await file.read()
@@ -103,14 +111,14 @@ async def predict_image_input(
         filenames.append(file.filename)
 
     images = np.array(images) / 255.0
+    model = model_registry.get_model(model_name.value, version=version, stage=stage)
     output = run_inference(
         images,
+        model,
         model_name.value,
         threshold_value,
         output_format.value,
         color,
-        version=version,
-        stage=stage,
     )
     if output_format.value == "mask":
         zip_filename = "masked_images.zip"

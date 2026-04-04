@@ -9,9 +9,9 @@ from src.utils.logging import setup_logging
 
 setup_logging()
 
-from api.services import load_metadata
+from api.services import model_registry
 
-load_metadata()
+model_registry.load_metadata()
 
 from api.routes import router
 

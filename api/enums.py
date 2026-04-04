@@ -1,6 +1,6 @@
 from enum import Enum
 
-from api.services import AVAILABLE_MODEL_NAMES
+from api.services import model_registry
 
 
 def build_model_enum(names: set[str]) -> type[Enum]:
@@ -11,7 +11,7 @@ def build_model_enum(names: set[str]) -> type[Enum]:
     return Enum("ModelName", members, type=str)
 
 
-ModelName = build_model_enum(AVAILABLE_MODEL_NAMES)
+ModelName = build_model_enum(model_registry.available_models)
 
 
 class ArrayOutputFormat(str, Enum):
