@@ -38,22 +38,23 @@ Training (src/training/train.py)
 
 - Python 3.13
 - Docker (optional)
-- Dataset available under `data/`
 - At least one trained model in `artifacts/models` for API startup
+- Dataset under `data/` is required only for training (not required for quick inference tests with bundled artifacts).
 
 ## Quick Test Without Training
 
-A prebuilt artifact bundle is included at the repo root:
+A prebuilt artifact bundle is included at the repo root (timestamped filename):
 
-- `artifacts_bundle_20260405_120312.tar.gz`
+- `artifacts_bundle_*.tar.gz`
 
 It contains `artifacts/models/`, `artifacts/sizes/`, and `artifacts/thresholds/` so you can run inference/API tests without training first.
 
 Extract it:
 
 ```bash
+BUNDLE=$(ls -1t artifacts_bundle_*.tar.gz | head -n 1)
 rm -rf artifacts/models artifacts/sizes artifacts/thresholds
-tar -xzf artifacts_bundle_20260405_120312.tar.gz -C .
+tar -xzf "$BUNDLE" -C .
 ```
 
 Sanity-check extracted files:
@@ -143,6 +144,8 @@ mlflow ui --backend-store-uri sqlite:///artifacts/mlflow/mlflow.db --host 127.0.
 
 Open: `http://127.0.0.1:5000`
 
+Important: keep API and MLflow UI on the same tracking backend. If they use different `MLFLOW_TRACKING_URI` values, stage/version lookups in API can fail even when UI shows models.
+
 Register local artifact models into MLflow (and promote latest version to `Production`):
 
 ```bash
@@ -213,6 +216,13 @@ Both endpoints support:
 - `stage` / `version` model selection
 - threshold selection (`90.0 <= threshold < 100`)
 - output format (`mask` or `redrawn`)
+
+Run inference with your own inputs:
+
+- Browser flow: open Swagger at `http://127.0.0.1:8000/docs`, expand `POST /predict_image/{model_name}` or `POST /predict_array/{model_name}`, click `Try it out`, submit your payload/files.
+- Script flow: use `python3 scripts/smoke_test_api.py --model screw --output-format mask --stage Production` for array endpoint smoke tests.
+- Script flow for single predict-image request with ZIP download: `python3 scripts/test_predict_image_download_zip.py --base-url http://127.0.0.1:8000 --model screw --output-format redrawn --stage Production --batch-size 2 --out artifacts/predict_image_output.zip`.
+- Script flow for image endpoint under concurrency: `python3 scripts/load_test.py --base-url http://127.0.0.1:8000 --model screw --output-format mask --requests 10 --concurrency 2 --batch-size 2 --images-dir artifacts/comparison_images`.
 
 Version vs stage behavior:
 
