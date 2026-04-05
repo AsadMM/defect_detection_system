@@ -7,6 +7,7 @@ from collections import OrderedDict
 from typing import Any
 
 import numpy as np
+from tensorflow import keras
 
 from src.inference.exceptions import ModelMetadataError, UnknownModelError
 
@@ -20,13 +21,13 @@ try:
 except Exception:  # pragma: no cover - optional dependency at runtime
     mlflow_keras = None
 
-from src.models.autoencoder import build1
 from src.models.threshold import get_results
 from src.utils.visualization import convert_int, get_drawn_results
 
 
 logger = logging.getLogger(__name__)
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///artifacts/mlflow/mlflow.db")
+MODEL_FILE_EXTENSION = ".keras"
 
 
 def _get_positive_int_env(name: str, default: int) -> int:
@@ -127,8 +128,8 @@ class ModelRegistryService:
             return
 
         for filename in os.listdir(model_dir):
-            if filename.startswith("model_") and filename.endswith(".h5"):
-                name = filename.replace("model_", "").replace(".h5", "")
+            if filename.startswith("model_") and filename.endswith(MODEL_FILE_EXTENSION):
+                name = filename[len("model_") :].rsplit(".", 1)[0]
                 size_path = f"artifacts/sizes/sizes_{name}.pkl"
                 threshold_path = f"artifacts/thresholds/thresholds_{name}.pkl"
 
@@ -152,6 +153,12 @@ class ModelRegistryService:
 
         logger.info("Loaded metadata for models: %s", sorted(self.available_models))
 
+    def _resolve_local_model_path(self, name: str) -> str:
+        candidate = f"artifacts/models/model_{name}{MODEL_FILE_EXTENSION}"
+        if os.path.isfile(candidate):
+            return candidate
+        raise FileNotFoundError(f"No local model artifact found for '{name}' at {candidate}")
+
     def _normalize_stage(self, stage: str) -> str:
         stage_map = {
             "production": "Production",
@@ -168,12 +175,8 @@ class ModelRegistryService:
 
     def _load_local_model(self, name: str):
         logger.info("Loading %s from local artifacts", name)
-
-        size = self.sizes[name]
-        model_path = f"artifacts/models/model_{name}.h5"
-
-        model = build1(size[0], size[0], size[1])
-        model.load_weights(model_path)
+        model_path = self._resolve_local_model_path(name)
+        model = keras.models.load_model(model_path)
 
         logger.info("Model %s loaded from local file", name)
         return model

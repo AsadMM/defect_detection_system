@@ -27,6 +27,7 @@ from tensorflow.keras.callbacks import Callback
 import tensorflow as tf
 import mlflow
 import mlflow.keras
+from mlflow.models import infer_signature
 import numpy as np
 import pickle
 import cv2
@@ -134,34 +135,25 @@ def register_model_in_registry(model, model_name: str) -> None:
     Log the trained Keras model and register it in MLflow Model Registry
     under the object-class name (e.g., bottle, screw).
     """
-    artifact_path = "model"
+    logged_model_name = "model"
     run = mlflow.active_run()
     if run is None:
         raise RuntimeError("No active MLflow run found while registering model.")
 
-    run_id = run.info.run_id
+    mlflow.set_tag("model_name", model_name)
+    _, height, width, channels = model.input_shape
+    signature_input = np.zeros((1, height, width, channels), dtype=np.float32)
+    signature_output = model.predict(signature_input, verbose=0)
+    signature = infer_signature(signature_input, signature_output)
 
-    try:
-        # Preferred path for MLflow versions that support direct registration during log_model.
-        mlflow.keras.log_model(
-            model,
-            artifact_path=artifact_path,
-            registered_model_name=model_name,
-        )
-        logger.info("Registered model '%s' in MLflow Model Registry", model_name)
-        return
-    except TypeError:
-        # Fallback for older/newer APIs where this signature may differ.
-        logger.info("Direct model registration during log_model unsupported; using register_model fallback")
-
-    mlflow.keras.log_model(model, artifact_path=artifact_path)
-    model_uri = f"runs:/{run_id}/{artifact_path}"
-    registered = mlflow.register_model(model_uri=model_uri, name=model_name)
-    logger.info(
-        "Registered model '%s' in MLflow Model Registry as version %s",
-        model_name,
-        registered.version,
+    mlflow.keras.log_model(
+        model,
+        name=logged_model_name,
+        registered_model_name=model_name,
+        signature=signature,
+        metadata={"model_name": model_name},
     )
+    logger.info("Registered model '%s' in MLflow Model Registry", model_name)
 
 
 
@@ -259,7 +251,7 @@ if __name__ == '__main__':
 
             # IGNORE THIS
             '''threshold = 0.07769
-            autoencoder.load_weights(os.path.join('artifacts', 'models', 'model_hazelnut.h5'))
+            autoencoder.load_weights(os.path.join('artifacts', 'models', 'model_hazelnut.keras'))
             autoencoder.summary()'''
 
             # Read test images and run through the model and finally get the masked images
@@ -290,7 +282,7 @@ if __name__ == '__main__':
             os.makedirs(os.path.join('artifacts', 'thresholds'), exist_ok=True)
             os.makedirs(os.path.join('artifacts', 'sizes'), exist_ok=True)
 
-            model_path = os.path.join('artifacts', 'models', 'model_' + NAME + '.h5')
+            model_path = os.path.join('artifacts', 'models', 'model_' + NAME + '.keras')
             threshold_path = os.path.join('artifacts', 'thresholds', 'thresholds_' + NAME + '.pkl')
             size_path = os.path.join('artifacts', 'sizes', 'sizes_' + NAME + '.pkl')
 
@@ -304,7 +296,6 @@ if __name__ == '__main__':
                 # Save the sizes value in a file
                 pickle.dump([IMG_SIZE, IMG_DEPTH], file)
 
-            mlflow.log_artifact(model_path, artifact_path="local_artifacts")
             mlflow.log_artifact(threshold_path, artifact_path="local_artifacts")
             mlflow.log_artifact(size_path, artifact_path="local_artifacts")
 

@@ -41,6 +41,20 @@ Training (src/training/train.py)
 - Dataset available under `data/`
 - At least one trained model in `artifacts/models` for API startup
 
+## Quick Test Without Training
+
+An example artifact bundle is included at the repo root:
+
+- `example-models-sizes-thresholds.zip`
+
+It contains `models/`, `sizes/`, and `thresholds/` so you can run inference/API tests without training first.
+
+Extract it into `artifacts/`:
+
+```bash
+python3 -m zipfile -e example-models-sizes-thresholds.zip artifacts/
+```
+
 ## Install (Local Python)
 
 ```bash
@@ -161,6 +175,30 @@ Both endpoints support:
 - `stage` / `version` model selection
 - threshold selection (`90.0 <= threshold < 100`)
 - output format (`mask` or `redrawn`)
+
+## Retraining Strategy (Design)
+
+This system does not perform automatic retraining by default.
+In a production setup, retraining would be triggered based on:
+
+- Data drift detection (input distribution shift)
+- Performance degradation (metric monitoring)
+- Scheduled retraining (time-based fallback)
+
+### Proposed Pipeline
+
+1. Collect inference data + predictions
+2. Periodically evaluate against ground truth
+3. Trigger retraining job if thresholds violated
+4. Log new model to MLflow
+5. Promote model via staging → production
+6. Deploy via model registry update
+
+### Safeguards
+
+- Manual approval gate before production promotion
+- Shadow testing / A/B testing for new models
+- Rollback to previous production model if needed
 
 ## Notes
 

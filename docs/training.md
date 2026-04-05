@@ -62,16 +62,18 @@ Notes:
 
 Training writes:
 
-- `artifacts/models/model_<name>.h5`
+- `artifacts/models/model_<name>.keras`
 - `artifacts/thresholds/thresholds_<name>.pkl`
 - `artifacts/sizes/sizes_<name>.pkl`
 - checkpoints under `artifacts/checkpoints/<name>/`
+
+Serving expects `.keras` artifacts only.
 
 ### Why we save more than just model files
 
 Serving requires both learned weights and serving metadata:
 
-- `model_<name>.h5`: learned reconstruction model weights.
+- `model_<name>.keras`: learned reconstruction model (architecture + weights, native Keras format).
 - `sizes_<name>.pkl`: expected input shape metadata used by the API for resize/reshape and validation.
 - `thresholds_<name>.pkl`: percentile-to-threshold map used to convert reconstruction error into anomaly masks.
 - checkpoints: intermediate training snapshots for recovery and debugging model-quality regressions.

@@ -1,9 +1,10 @@
-import pickle
+import os
+
 import mlflow
 import mlflow.keras
+import numpy as np
+from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
-from src.models.autoencoder import build1
-import os
 
 TRACKING_URI = "sqlite:///artifacts/mlflow/mlflow.db"
 NAMES = ["bottle", "hazelnut", "screw", "wood"]
@@ -13,27 +14,28 @@ mlflow.set_experiment("autoencoder_anomaly_detection")
 client = MlflowClient(tracking_uri=TRACKING_URI)
 
 for name in NAMES:
-    size_path = f"artifacts/sizes/sizes_{name}.pkl"
-    model_path = f"artifacts/models/model_{name}.h5"
-    if not (os.path.isfile(size_path) and os.path.isfile(model_path)):
-        print(f"Skip {name}: missing size/model file")
+    model_path = f"artifacts/models/model_{name}.keras"
+    if not os.path.isfile(model_path):
+        print(f"Skip {name}: missing .keras model file")
         continue
-
-    with open(size_path, "rb") as f:
-        size = pickle.load(f)
-
-    model = build1(size[0], size[0], size[1])
-    model.load_weights(model_path)
+    model = mlflow.keras.load_model(model_path)
+    _, height, width, channels = model.input_shape
+    signature_input = np.zeros((1, height, width, channels), dtype=np.float32)
+    signature_output = model.predict(signature_input, verbose=0)
+    signature = infer_signature(signature_input, signature_output)
 
     with mlflow.start_run(run_name=f"bootstrap-register-{name}"):
         mlflow.log_param("dataset_name", f"mvtec/{name}")
-        mlflow.log_param("bootstrap_from_local_h5", True)
-        info = mlflow.keras.log_model(
+        mlflow.log_param("bootstrap_from_local_artifact", "keras")
+        mlflow.set_tag("model_name", name)
+        mlflow.keras.log_model(
             model,
             artifact_path="model",
             registered_model_name=name,
+            signature=signature,
+            metadata={"model_name": name},
         )
-        print(f"Registered {name} from local h5")
+        print(f"Registered {name} from local keras")
 
     versions = client.search_model_versions(f"name='{name}'")
     latest = max(versions, key=lambda v: int(v.version))
