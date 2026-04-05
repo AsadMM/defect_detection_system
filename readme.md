@@ -43,16 +43,23 @@ Training (src/training/train.py)
 
 ## Quick Test Without Training
 
-An example artifact bundle is included at the repo root:
+A prebuilt artifact bundle is included at the repo root:
 
-- `example-models-sizes-thresholds.zip`
+- `artifacts_bundle_20260405_120312.tar.gz`
 
-It contains `models/`, `sizes/`, and `thresholds/` so you can run inference/API tests without training first.
+It contains `artifacts/models/`, `artifacts/sizes/`, and `artifacts/thresholds/` so you can run inference/API tests without training first.
 
-Extract it into `artifacts/`:
+Extract it:
 
 ```bash
-python3 -m zipfile -e example-models-sizes-thresholds.zip artifacts/
+rm -rf artifacts/models artifacts/sizes artifacts/thresholds
+tar -xzf artifacts_bundle_20260405_120312.tar.gz -C .
+```
+
+Sanity-check extracted files:
+
+```bash
+ls artifacts/models artifacts/sizes artifacts/thresholds
 ```
 
 ## Install (Local Python)
@@ -71,6 +78,12 @@ uvicorn api.main:app --reload --host 127.0.0.1 --port 8000
 
 - Swagger: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
+
+Smoke test with the bundled `screw` artifacts:
+
+```bash
+python3 scripts/smoke_test_api.py --model screw --output-format mask --stage Production
+```
 
 ## Run API (Prod-style)
 
@@ -130,6 +143,31 @@ mlflow ui --backend-store-uri sqlite:///artifacts/mlflow/mlflow.db --host 127.0.
 
 Open: `http://127.0.0.1:5000`
 
+Register local artifact models into MLflow (and promote latest version to `Production`):
+
+```bash
+python3 scripts/test_register_artifacts.py
+```
+
+You can also run it from inside the `scripts/` directory:
+
+```bash
+cd scripts
+python3 test_register_artifacts.py
+```
+
+What this script does:
+
+- scans `artifacts/models/model_{name}.keras` for `bottle`, `hazelnut`, `screw`, `wood` (you can change this to include your own model as well)
+- logs/registers each found model in MLflow Model Registry
+- transitions the latest registered version for each model to `Production`
+
+Promote a specific model version to `Production` from command line:
+
+```bash
+python3 scripts/promote_model_to_production.py --model screw --version 3
+```
+
 ## Training
 
 Short form:
@@ -175,6 +213,12 @@ Both endpoints support:
 - `stage` / `version` model selection
 - threshold selection (`90.0 <= threshold < 100`)
 - output format (`mask` or `redrawn`)
+
+Version vs stage behavior:
+
+- `?version=<n>` loads `models:/<name>/<n>` directly, so it works even if that version is not in `Production`.
+- `?stage=Production` loads `models:/<name>/Production`, so at least one version must be promoted to that stage.
+- Do not send non-Production stage together with version (`version` + `stage=Staging` is rejected).
 
 ## Retraining Strategy (Design)
 

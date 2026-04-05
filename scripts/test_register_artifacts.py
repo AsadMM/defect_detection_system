@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import mlflow
 import mlflow.keras
@@ -6,19 +7,24 @@ import numpy as np
 from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
 
-TRACKING_URI = "sqlite:///artifacts/mlflow/mlflow.db"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ARTIFACTS_DIR = REPO_ROOT / "artifacts"
+MLFLOW_DB_PATH = ARTIFACTS_DIR / "mlflow" / "mlflow.db"
+TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", f"sqlite:///{MLFLOW_DB_PATH.as_posix()}")
 NAMES = ["bottle", "hazelnut", "screw", "wood"]
 
 mlflow.set_tracking_uri(TRACKING_URI)
 mlflow.set_experiment("autoencoder_anomaly_detection")
 client = MlflowClient(tracking_uri=TRACKING_URI)
 
+print(f"Using MLflow tracking URI: {TRACKING_URI}")
+
 for name in NAMES:
-    model_path = f"artifacts/models/model_{name}.keras"
-    if not os.path.isfile(model_path):
+    model_path = ARTIFACTS_DIR / "models" / f"model_{name}.keras"
+    if not model_path.is_file():
         print(f"Skip {name}: missing .keras model file")
         continue
-    model = mlflow.keras.load_model(model_path)
+    model = mlflow.keras.load_model(str(model_path))
     _, height, width, channels = model.input_shape
     signature_input = np.zeros((1, height, width, channels), dtype=np.float32)
     signature_output = model.predict(signature_input, verbose=0)

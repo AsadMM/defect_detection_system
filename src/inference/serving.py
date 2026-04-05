@@ -31,6 +31,7 @@ MODEL_FILE_EXTENSION = ".keras"
 
 
 def _get_positive_int_env(name: str, default: int) -> int:
+    """Read a positive integer env var with safe fallback behavior."""
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -42,7 +43,10 @@ def _get_positive_int_env(name: str, default: int) -> int:
 
 
 class ModelRegistryService:
+    """Loads model metadata, resolves model sources, and manages an in-memory LRU model cache."""
+
     def __init__(self):
+        """Initialize cache state and configure MLflow tracking URI (if available)."""
         self.models: OrderedDict[tuple[str, str], Any] = OrderedDict()
         self.model_cache_bytes: dict[tuple[str, str], int] = {}
         self.model_cache_total_bytes = 0
@@ -58,6 +62,7 @@ class ModelRegistryService:
         logger.info("Model cache max size set to %.2f MB", self.max_model_cache_bytes / (1024 * 1024))
 
     def _estimate_model_size_bytes(self, model: Any) -> int:
+        """Estimate model memory footprint in bytes for cache accounting."""
         # Approximate model memory usage from parameters.
         try:
             params = int(model.count_params())
@@ -79,6 +84,7 @@ class ModelRegistryService:
             return 0
 
     def _evict_until_capacity(self, incoming_size: int) -> None:
+        """Evict least-recently-used cached models until capacity is sufficient."""
         while self.model_cache_total_bytes + incoming_size > self.max_model_cache_bytes and self.models:
             evicted_key, _ = self.models.popitem(last=False)
             evicted_size = self.model_cache_bytes.pop(evicted_key, 0)
@@ -91,6 +97,7 @@ class ModelRegistryService:
             )
 
     def _try_cache_model(self, key: tuple[str, str], model: Any) -> None:
+        """Cache a loaded model when size can be estimated and budget allows."""
         size_bytes = self._estimate_model_size_bytes(model)
         if size_bytes <= 0:
             logger.warning("Model size could not be estimated for %s; model will not be cached", key)
@@ -118,6 +125,7 @@ class ModelRegistryService:
         )
 
     def load_metadata(self) -> None:
+        """Load model availability, input sizes, and threshold maps from local artifacts."""
         self.available_models.clear()
         self.sizes.clear()
         self.threshold_maps.clear()
@@ -154,12 +162,14 @@ class ModelRegistryService:
         logger.info("Loaded metadata for models: %s", sorted(self.available_models))
 
     def _resolve_local_model_path(self, name: str) -> str:
+        """Return expected local model file path or raise if missing."""
         candidate = f"artifacts/models/model_{name}{MODEL_FILE_EXTENSION}"
         if os.path.isfile(candidate):
             return candidate
         raise FileNotFoundError(f"No local model artifact found for '{name}' at {candidate}")
 
     def _normalize_stage(self, stage: str) -> str:
+        """Normalize user-provided stage string to MLflow canonical stage names."""
         stage_map = {
             "production": "Production",
             "staging": "Staging",
@@ -168,12 +178,14 @@ class ModelRegistryService:
         return stage_map.get(stage.strip().lower(), stage.strip())
 
     def _get_cache_key(self, name: str, version: int | None, stage: str) -> tuple[str, str]:
+        """Build a cache key using model name and either version or normalized stage."""
         if version is not None:
             return name, f"v{version}"
         normalized_stage = self._normalize_stage(stage)
         return name, normalized_stage
 
     def _load_local_model(self, name: str):
+        """Load model from local `artifacts/models` fallback location."""
         logger.info("Loading %s from local artifacts", name)
         model_path = self._resolve_local_model_path(name)
         model = keras.models.load_model(model_path)
@@ -182,6 +194,7 @@ class ModelRegistryService:
         return model
 
     def _load_model(self, name: str, version: int | None = None, stage: str = "Production"):
+        """Load model from MLflow first, then fall back to local artifacts on failure."""
         normalized_stage = self._normalize_stage(stage)
         if version is not None:
             model_uri = f"models:/{name}/{version}"
@@ -200,6 +213,7 @@ class ModelRegistryService:
             return self._load_local_model(name)
 
     def get_model(self, name: str, version: int | None = None, stage: str = "Production"):
+        """Return cached model or load-and-cache it for the requested selector."""
         key = self._get_cache_key(name, version, stage)
 
         if key in self.models:
@@ -222,6 +236,7 @@ class ModelRegistryService:
             return model
 
     def get_threshold_value(self, model_name: str, threshold: float) -> float:
+        """Resolve a requested percentile threshold to the stored numeric threshold value."""
         rounded_threshold = round(threshold, 1)
         model_thresholds = self.threshold_maps.get(model_name)
         if model_thresholds is None:
@@ -233,6 +248,7 @@ class ModelRegistryService:
         return model_thresholds[rounded_threshold]
 
     def get_model_context(self, model_name: str, threshold: float, redraw_color: str):
+        """Return serving metadata tuple: input size, threshold value, and drawing color."""
         colors = {"blue": (255, 0, 0), "green": (0, 255, 0), "red": (0, 0, 255)}
         img_size = self.sizes.get(model_name)
         if img_size is None:
@@ -255,6 +271,7 @@ def run_inference(
     output_format: str,
     color: tuple,
 ):
+    """Run model prediction and return either mask arrays or redrawn output images."""
     logger.info("Running inference for model=%s", model_name)
     start = time.time()
     predicted_images = model.predict(images)
